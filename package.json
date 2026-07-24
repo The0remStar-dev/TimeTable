@@ -1,0 +1,11 @@
+{
+  "scripts": {
+    "dev": "cd Timetable && npm run dev",
+    "build": "cd Timetable && npm run build",
+    "preview": "cd Timetable && npm run preview",
+    "lint": "cd Timetable && npm run lint"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.7"
+  }
+}

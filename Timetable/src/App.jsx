@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 
 import Sidebar from './components/Sidebar';
@@ -127,11 +127,10 @@ const buildTableContext = (table, matches, players) => {
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [tableFilter, setTableFilter] = useState('all');
-  const [playedMatchesCount, setPlayedMatchesCount] = useState(0);
-  const [queue, setQueue] = useState([]);
   const [players, setPlayers] = useState([]);
   const [playerSearch, setPlayerSearch] = useState('');
   const [playerCatFilter, setPlayerCatFilter] = useState('Tous');
+  const [selectedCategoryId] = useState(null);
   const [settings, setSettings] = useState({
     tournamentName: 'Open de Tennis de Table 2026',
     referee: 'Jean-Marc Vallet (JA3)',
@@ -139,72 +138,76 @@ export default function App() {
     avgMatchDuration: 25,
     matchFormat: '3_SETS_GAGNANTS'
   });
-  const [tables, setTables] = useState([]);
   const [scoreModalTable, setScoreModalTable] = useState(null);
   const [scores, setScores] = useState(Array.from({ length: 5 }).map(() => ({ p1: '', p2: '' })));
   const [assignModalTable, setAssignModalTable] = useState(null);
-  const [matches, setMatches] = useState([]);
+  const [tables, setTables] = useState([]);
   const tournament = useTournament();
   const {
     players: ctxPlayers,
     matches: ctxMatches,
     tables: ctxTables,
+    categories: ctxCategories,
     assignMatchToTable,
     autoAssignMatches,
     completeMatch,
     assignPouleToTable,
     submitPouleMatchResult,
-    generateBracket,
+    updatePlayerPaymentStatus,
+    deletePlayerById,
   } = tournament || {};
 
-  useEffect(() => {
-    if (!matches) return;
-    const played = matches.filter((match) => match.status && ['played', 'finished', 'completed'].includes(String(match.status).toLowerCase()));
-    setPlayedMatchesCount(played.length);
-  }, [matches]);
-
-  useEffect(() => {
-    if (ctxPlayers) setPlayers(ctxPlayers);
-  }, [ctxPlayers]);
-
-  useEffect(() => {
-    if (ctxMatches) setMatches(ctxMatches);
-  }, [ctxMatches]);
-
-  useEffect(() => {
-    if (!ctxTables) return;
-    setTables(
-      ctxTables.map((table) => ({
+  const matches = useMemo(() => ctxMatches ?? [], [ctxMatches]);
+  const derivedPlayers = useMemo(() => ctxPlayers ?? players, [ctxPlayers, players]);
+  const tablesFromContext = useMemo(
+    () =>
+      (ctxTables ?? []).map((table) => ({
         ...table,
         status: normalizeTableStatus(table.status),
-        context: buildTableContext(table, matches, players),
-      }))
-    );
-  }, [ctxTables, matches, players]);
-
-  useEffect(() => {
-    if (!matches || matches.length === 0 || !players.length) {
-      setQueue([]);
-      return;
-    }
-
+        context: buildTableContext(table, matches, derivedPlayers),
+      })),
+    [ctxTables, matches, derivedPlayers]
+  );
+  const tablesWithState = tables.length ? tables : tablesFromContext;
+  const playersWithState = ctxPlayers ?? players;
+  const playedMatchesCount = useMemo(
+    () => matches.filter((match) => match.status && ['played', 'finished', 'completed'].includes(String(match.status).toLowerCase())).length,
+    [matches]
+  );
+  const queue = useMemo(() => {
+    if (!matches.length || !playersWithState.length) return [];
     const scheduled = matches.filter((match) => String(match.status || '').toLowerCase() === 'scheduled');
-    const grouped = [...buildPouleQueue(scheduled, players), ...buildBracketQueue(scheduled, players)].sort((a, b) => (a.type === 'poule' ? -1 : 1));
-    setQueue(grouped);
-  }, [matches, players]);
+    return [...buildPouleQueue(scheduled, playersWithState), ...buildBracketQueue(scheduled, playersWithState)].sort((a) => (a.type === 'poule' ? -1 : 1));
+  }, [matches, playersWithState]);
 
   const activeTablesCount = useMemo(
-    () => tables.filter((table) => normalizeTableStatus(table.status) === 'EN COURS').length,
-    [tables]
+    () => tablesWithState.filter((table) => normalizeTableStatus(table.status) === 'EN COURS').length,
+    [tablesWithState]
   );
 
   const freeTablesCount = useMemo(
-    () => tables.filter((table) => normalizeTableStatus(table.status) === 'DISPONIBLE').length,
-    [tables]
+    () => tablesWithState.filter((table) => normalizeTableStatus(table.status) === 'DISPONIBLE').length,
+    [tablesWithState]
   );
 
   const handleAutoAssign = () => {
     if (autoAssignMatches) autoAssignMatches();
+  };
+
+  const togglePlayerPayment = async (playerId, paid) => {
+    if (!updatePlayerPaymentStatus) return;
+    const result = await updatePlayerPaymentStatus(playerId, paid);
+    if (!result.success) {
+      console.error('Erreur mise à jour paiement', result.error);
+    }
+  };
+
+  const deletePlayer = async (playerId) => {
+    if (!deletePlayerById) return;
+    const result = await deletePlayerById(playerId);
+    if (!result.success) {
+      console.error('Erreur suppression joueur', result.error);
+    }
   };
 
   const handleAssignSpecificMatch = async (tableId, block) => {
@@ -257,20 +260,18 @@ export default function App() {
       <div className="flex-1 flex flex-col overflow-y-auto p-8 gap-6">
         {activeTab === 'dashboard' && (
           <DashboardPage
-            tables={tables}
+            tables={tablesWithState}
             queue={queue}
-            settings={settings}
             tableFilter={tableFilter}
             setTableFilter={setTableFilter}
             activeTablesCount={activeTablesCount}
             freeTablesCount={freeTablesCount}
             playedMatchesCount={playedMatchesCount}
-            players={players}
             onAutoAssign={handleAutoAssign}
             onAssignSpecificMatch={handleAssignSpecificMatch}
             onOpenScore={setScoreModalTable}
             onOpenAssign={setAssignModalTable}
-            onRefresh={() => setTables([...tables])}
+            onRefresh={() => setTables([...tablesWithState])}
           />
         )}
 
@@ -282,15 +283,19 @@ export default function App() {
 
         {activeTab === 'joueurs' && (
           <PlayersPage
-            players={players}
+            players={playersWithState}
             playerSearch={playerSearch}
             setPlayerSearch={setPlayerSearch}
             playerCatFilter={playerCatFilter}
             setPlayerCatFilter={setPlayerCatFilter}
+            selectedCategoryId={selectedCategoryId}
+            onTogglePayment={togglePlayerPayment}
+            onDeletePlayer={deletePlayer}
+            categories={ctxCategories || []}
           />
         )}
 
-        {activeTab === 'paiements' && <PaymentsPage players={players} setPlayers={setPlayers} />}
+        {activeTab === 'paiements' && <PaymentsPage players={playersWithState} setPlayers={setPlayers} />}
 
         {activeTab === 'parametres' && <SettingsPage settings={settings} setSettings={setSettings} />}
       </div>

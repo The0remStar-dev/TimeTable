@@ -336,7 +336,7 @@ export async function generateBracket(categoryId) {
         player2_id: p2.id,
         status: 'scheduled',
         is_bye: false,
-        _pairIndex: i,
+        pairIndex: i,
       });
     } else {
       const advancing = p1 || p2;
@@ -346,7 +346,7 @@ export async function generateBracket(categoryId) {
 
   let insertedFirstRound = [];
   if (firstRoundMatchesPayload.length > 0) {
-    const cleanPayload = firstRoundMatchesPayload.map(({ _pairIndex, ...rest }) => rest);
+    const cleanPayload = firstRoundMatchesPayload.map(({ pairIndex, ...rest }) => ({ ...rest, pairIndex }));
     const { data: inserted, error: insError } = await supabase
       .from('matches')
       .insert(cleanPayload)
@@ -354,7 +354,7 @@ export async function generateBracket(categoryId) {
     if (insError) throw new Error(`Erreur création tour préliminaire : ${insError.message}`);
     insertedFirstRound = inserted.map((row, idx) => ({
       ...row,
-      pairIndex: firstRoundMatchesPayload[idx]._pairIndex,
+      pairIndex: cleanPayload[idx].pairIndex,
     }));
   }
 

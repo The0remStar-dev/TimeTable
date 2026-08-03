@@ -1,4 +1,4 @@
-import { Search, Filter, Check, AlertCircle } from 'lucide-react';
+import { Search, Filter, Check, AlertCircle, Trash2 } from 'lucide-react';
 
 const statusConfig = {
   in_poules: { label: 'En Poule', className: 'bg-blue-100 text-blue-700 border-blue-200' },
@@ -8,16 +8,35 @@ const statusConfig = {
   playing: { label: 'En cours', className: 'bg-violet-100 text-violet-700 border-violet-200' },
 };
 
-export default function PlayersPage({ players, playerSearch, setPlayerSearch, playerCatFilter, setPlayerCatFilter }) {
+export default function PlayersPage({
+  players,
+  playerSearch,
+  setPlayerSearch,
+  playerCatFilter,
+  setPlayerCatFilter,
+  selectedCategoryId,
+  onTogglePayment,
+  onDeletePlayer,
+  categories = [],
+}) {
+  const categoryOptions = categories.length ? categories : [];
+
   const filteredPlayers = players.filter((player) => {
     const playerName = String(player.name || '').toLowerCase();
-    const clubName = String(player.club || '').toLowerCase();
+    const clubName = String(player.club || player.category || '').toLowerCase();
     const matchesSearch =
       playerName.includes(playerSearch.toLowerCase()) ||
       clubName.includes(playerSearch.toLowerCase());
-    const matchesCat = playerCatFilter === 'Tous' || player.category === playerCatFilter;
+    const matchesCat = playerCatFilter === 'Tous' || playerCatFilter === 'all' || player.category === playerCatFilter || (player.categories || []).includes(playerCatFilter) || selectedCategoryId === playerCatFilter;
     return matchesSearch && matchesCat;
   });
+
+  const handleDelete = async (player) => {
+    if (!window.confirm(`Supprimer le joueur ${player.name} ?`)) return;
+    if (onDeletePlayer) {
+      await onDeletePlayer(player.id);
+    }
+  };
 
   return (
     <main className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50">
@@ -42,9 +61,11 @@ export default function PlayersPage({ players, playerSearch, setPlayerSearch, pl
               className="text-xs border border-slate-200 rounded-xl px-3 py-2 bg-white font-medium text-slate-700 focus:outline-none focus:border-emerald-500"
             >
               <option value="Tous">Toutes les catégories</option>
-              <option value="Open A">Open A</option>
-              <option value="Open B">Open B</option>
-              <option value="Dames">Dames</option>
+              {(categoryOptions || []).map((category) => (
+                <option key={category.id} value={category.name}>
+                  {category.name}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -54,19 +75,21 @@ export default function PlayersPage({ players, playerSearch, setPlayerSearch, pl
             <thead className="bg-slate-50 border-y border-slate-200 text-slate-500 uppercase font-bold text-[10px]">
               <tr>
                 <th className="py-3 px-4">Nom Joueur</th>
-                <th className="py-3 px-4">Club</th>
+                <th className="py-3 px-4">Catégorie</th>
                 <th className="py-3 px-4 text-center">Points FFTT</th>
                 <th className="py-3 px-4">Statut</th>
                 <th className="py-3 px-4 text-center">Paiement</th>
+                <th className="py-3 px-4 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
               {filteredPlayers.map((player) => {
                 const status = statusConfig[player.status] || { label: 'En Poule', className: 'bg-blue-100 text-blue-700 border-blue-200' };
+                const paid = Boolean(player.payment_status === 'paid' || player.is_paid === true || player.paid === true);
                 return (
                   <tr key={player.id} className="hover:bg-slate-50 transition-colors">
                     <td className="py-3 px-4 font-bold text-slate-900">{player.name}</td>
-                    <td className="py-3 px-4 text-slate-600">{player.club || player.category || '—'}</td>
+                    <td className="py-3 px-4 text-slate-600">{player.category || player.categories?.[0] || '—'}</td>
                     <td className="py-3 px-4 text-center font-semibold text-slate-700">{Number(player.fftt_points ?? player.points ?? player.pts ?? 0)} pts</td>
                     <td className="py-3 px-4">
                       <span className={`inline-flex items-center border px-2 py-0.5 rounded-full text-[11px] font-semibold ${status.className}`}>
@@ -74,15 +97,27 @@ export default function PlayersPage({ players, playerSearch, setPlayerSearch, pl
                       </span>
                     </td>
                     <td className="py-3 px-4 text-center">
-                      {player.paid ? (
-                        <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-[10px] font-bold border border-emerald-200">
-                          <Check className="w-3 h-3" /> Payé
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full text-[10px] font-bold border border-amber-200">
-                          <AlertCircle className="w-3 h-3" /> En attente
-                        </span>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => onTogglePayment?.(player.id, !paid)}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border transition-colors ${
+                          paid
+                            ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                            : 'text-amber-700 bg-amber-50 border-amber-200'
+                        }`}
+                      >
+                        {paid ? <Check className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                        {paid ? 'Payé' : 'En attente'}
+                      </button>
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(player)}
+                        className="inline-flex items-center gap-1 text-red-700 bg-red-50 border border-red-200 px-2 py-1 rounded-lg font-bold hover:bg-red-100"
+                      >
+                        <Trash2 className="w-3 h-3" /> Supprimer
+                      </button>
                     </td>
                   </tr>
                 );

@@ -1,6 +1,14 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
-import { createCategory, createPlayerWithCategories, fetchCategoriesWithCounts } from '../services/tournamentService';
+import {
+  createCategory,
+  createPlayerWithCategories,
+  fetchCategoriesWithCounts,
+  updatePlayerPaymentStatus,
+  deletePlayerById,
+  deleteCategoryById,
+  updateCategoryStatus
+} from '../services/tournamentService';
 import {
   launchNextMatches,
   assignBracketMatchToTable,
@@ -13,6 +21,7 @@ const TournamentContext = createContext(null);
 
 const getPlayerRating = (player = {}) => Number(player?.fftt_points ?? player?.points ?? 0);
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useTournament() {
   return useContext(TournamentContext);
 }
@@ -35,14 +44,19 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
     if (!tournamentId) return;
     const { data } = await supabase
       .from('players')
-      .select('*, category_players(status, categories(name))')
+      .select('*, category_players(status, category_id, categories(name))')
       .eq('tournament_id', tournamentId)
       .order('name');
 
     if (data) {
       const normalized = data.map((player) => {
+        const assignedCategories = (player.category_players || [])
+          .map((link) => link?.categories?.name)
+          .filter(Boolean);
         const assignedStatus = player.category_players?.[0]?.status || 'in_poules';
-        const assignedCategory = player.category_players?.[0]?.categories?.name || 'Tableau principal';
+        const assignedCategory = assignedCategories[0] || 'Tableau principal';
+        const paid = Boolean(player.payment_status === 'paid' || player.is_paid === true || player.paid === true);
+
         return {
           ...player,
           name: player.name || player.full_name || 'Joueur',
@@ -50,6 +64,9 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
           points: player.points ?? getPlayerRating(player),
           status: assignedStatus,
           category: assignedCategory,
+          categories: assignedCategories,
+          paid,
+          payment_status: player.payment_status || (paid ? 'paid' : 'unpaid'),
         };
       });
       setPlayers(normalized);
@@ -75,24 +92,10 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
     loadCategories();
   }, [loadTables, loadPlayers, loadMatches, loadCategories]);
 
-  // load current tournament (first available) if none provided
-  const loadCurrentTournament = useCallback(async () => {
-    if (tournamentId) return;
-    const { data, error } = await supabase.from('tournaments').select('id').limit(1).single();
-    if (error) return;
-    if (data && data.id) {
-      setCurrentTournament(data);
-      setTournamentId(data.id);
-    }
-  }, [tournamentId]);
-
   useEffect(() => {
-    // ensure we have a tournament id first
-    loadCurrentTournament();
-  }, [loadCurrentTournament]);
+    if (!tournamentId || String(tournamentId) === '1') return undefined;
 
-  useEffect(() => {
-    if (!tournamentId || String(tournamentId) === '1') return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadAll();
 
     const tablesSub = supabase
@@ -127,11 +130,11 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
         supabase.removeChannel(matchesSub);
         supabase.removeChannel(categoriesSub);
         supabase.removeChannel(catPlayersSub);
-      } catch (e) {
+      } catch {
         // ignore
       }
     };
-  }, [loadAll, loadTables, loadPlayers, loadMatches, loadCategories, tournamentId, loadCurrentTournament]);
+  }, [loadAll, loadTables, loadPlayers, loadMatches, loadCategories, tournamentId]);
 
   // Actions
   const createTournament = async (name) => {
@@ -230,10 +233,13 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
     submitPouleMatchResult,
     generateBracket,
     completeMatch,
-    autoAssignMatches
+    autoAssignMatches,
+    updatePlayerPaymentStatus,
+    deletePlayerById,
+    deleteCategoryById,
+    updateCategoryStatus
   };
 
   return <TournamentContext.Provider value={value}>{children}</TournamentContext.Provider>;
 }
 
-export default TournamentContext;

@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS public.categories (
   tournament_id uuid REFERENCES public.tournaments(id) ON DELETE CASCADE,
   name text NOT NULL,
   start_time timestamptz,
+  status text DEFAULT 'draft',
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
@@ -91,6 +92,9 @@ ALTER TABLE public.matches
   ADD COLUMN IF NOT EXISTS next_match_id uuid REFERENCES public.matches(id),
   ADD COLUMN IF NOT EXISTS poule_order integer,
   ADD COLUMN IF NOT EXISTS is_bye boolean DEFAULT false;
+
+ALTER TABLE public.categories
+  ADD COLUMN IF NOT EXISTS status text DEFAULT 'draft';
 
 ALTER TABLE public.category_players
   ADD COLUMN IF NOT EXISTS status text

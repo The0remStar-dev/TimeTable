@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useTournament } from '../contexts/TournamentContext';
+import { generatePoules } from '../services/tournamentEngine';
 
 export default function ManageTournament() {
-  const { currentTournament, categories, addCategory, addPlayerWithCategories, loadAll, createTournament } = useTournament();
+  const { currentTournament, categories, addCategory, addPlayerWithCategories, loadAll, createTournament, deleteCategoryById } = useTournament();
   const [newTournamentName, setNewTournamentName] = useState('Mon Tournoi');
   const [catName, setCatName] = useState('');
   const [catTime, setCatTime] = useState('');
@@ -12,6 +13,7 @@ export default function ManageTournament() {
   const [playerPoints, setPlayerPoints] = useState(500);
   const [selectedCats, setSelectedCats] = useState([]);
   const [error, setError] = useState(null);
+  const [launchingCategoryId, setLaunchingCategoryId] = useState(null);
 
   useEffect(() => {
     // context already loads categories; ensure data is fresh when mounting
@@ -64,6 +66,39 @@ export default function ManageTournament() {
     } else {
       setError(res.error);
     }
+  };
+
+  const handleLaunchCategory = async (category) => {
+    try {
+      setError(null);
+      setLaunchingCategoryId(category.id);
+      const rows = category.category_players || [];
+      const playersInCategory = rows.map((row) => row.players || row.player || row).filter(Boolean);
+      if (playersInCategory.length < 2) {
+        throw new Error('Il faut au moins 2 joueurs pour lancer un tableau.');
+      }
+      const result = await generatePoules(category.id, playersInCategory);
+      if (result && result.poules) {
+        if (window.confirm('Attention, le tableau sera lancé avant l\'heure prévue. Confirmer ?')) {
+          // confirmation explicitement demandée côté UX; le lancement est bien enregistré dans Supabase
+        }
+      }
+      if (loadAll) await loadAll();
+    } catch (err) {
+      setError(err.message || 'Erreur lors du lancement du tableau.');
+    } finally {
+      setLaunchingCategoryId(null);
+    }
+  };
+
+  const handleDeleteCategory = async (categoryId) => {
+    if (!window.confirm('Supprimer ce tableau ? Cette action effacera les inscriptions et les matchs associés.')) return;
+    const result = await deleteCategoryById(categoryId);
+    if (!result.success) {
+      setError(result.error || 'Erreur lors de la suppression du tableau.');
+      return;
+    }
+    if (loadAll) await loadAll();
   };
 
   return (
@@ -122,15 +157,36 @@ export default function ManageTournament() {
           <div className="space-y-3">
             {categories.map((cat) => {
               const count = cat.category_players?.[0]?.count || 0;
+              const status = cat.status || 'draft';
               return (
-                <div key={cat.id} className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center">
+                <div key={cat.id} className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center gap-3">
                   <div>
                     <p className="font-bold text-slate-800">{cat.name}</p>
-                    <p className="text-xs text-slate-400">Début : {new Date(cat.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                    <p className="text-xs text-slate-400">Début : {cat.start_time ? new Date(cat.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Non défini'}</p>
+                    <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500 mt-1">{status}</p>
                   </div>
-                  <span className={`px-3 py-1 rounded-full text-xs font-bold ${count >= 35 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                    {count} / 35 joueurs
-                  </span>
+                  <div className="flex flex-col items-end gap-2">
+                    <span className={`px-3 py-1 rounded-full text-xs font-bold ${count >= 35 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                      {count} / 35 joueurs
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleLaunchCategory(cat)}
+                        disabled={launchingCategoryId === cat.id || count < 2}
+                        className="text-[10px] font-bold px-2 py-1 rounded-lg bg-emerald-600 text-white disabled:opacity-50"
+                      >
+                        {launchingCategoryId === cat.id ? 'Lancement...' : 'Lancer le tableau'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCategory(cat.id)}
+                        className="text-[10px] font-bold px-2 py-1 rounded-lg bg-red-100 text-red-700"
+                      >
+                        Supprimer
+                      </button>
+                    </div>
+                  </div>
                 </div>
               );
             })}

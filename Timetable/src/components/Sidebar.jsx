@@ -4,8 +4,6 @@ import {
   Users,
   CreditCard,
   Settings,
-  Shield,
-  Trophy
 } from 'lucide-react';
 
 export default function Sidebar({ activeTab, onChangeTab, refereeName, tournamentName }) {
@@ -59,7 +57,7 @@ export default function Sidebar({ activeTab, onChangeTab, refereeName, tournamen
       <div className="bg-slate-800 rounded-xl p-3 flex items-center gap-3">
         <div className="bg-slate-800 text-slate-200 w-10 h-10 rounded-full font-bold flex items-center justify-center">JA</div>
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-white truncate">Jean Arbitre</p>
+          <p className="text-sm font-semibold text-white truncate">{refereeName || 'Jean Arbitre'}</p>
           <p className="text-[11px] text-slate-400">Juge-Arbitre Principal</p>
         </div>
       </div>

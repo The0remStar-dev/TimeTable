@@ -432,7 +432,7 @@ export async function generateBracket(categoryId) {
         player2_id: p2.id,
         status: 'scheduled',
         is_bye: false,
-        _pairIndex: i,
+        pairIndex: i,
       });
     } else {
       // Bye : le joueur présent avance directement, aucun match à jouer
@@ -451,7 +451,7 @@ export async function generateBracket(categoryId) {
   // s'il n'y avait pas de byes)
   let insertedFirstRound = [];
   if (firstRoundMatchesPayload.length > 0) {
-    const cleanPayload = firstRoundMatchesPayload.map(({ _pairIndex, ...rest }) => rest);
+    const cleanPayload = firstRoundMatchesPayload.map(({ pairIndex, ...rest }) => ({ ...rest, pairIndex }));
     const { data: inserted, error: insError } = await supabase
       .from('matches')
       .insert(cleanPayload)
@@ -459,14 +459,12 @@ export async function generateBracket(categoryId) {
     if (insError) throw new Error(`Erreur création tour préliminaire : ${insError.message}`);
     insertedFirstRound = inserted.map((row, idx) => ({
       ...row,
-      pairIndex: firstRoundMatchesPayload[idx]._pairIndex,
+      pairIndex: cleanPayload[idx].pairIndex,
     }));
   }
 
   // 7) Construction des tours suivants (vide, à remplir au fur et à
   // mesure des victoires) avec chaînage next_match_id
-  let currentRoundSize = bracketSize / 2; // nombre de "slots" du tour courant après le 1er tour
-  let previousRoundMatchIds = null; // mapping pairIndex -> matchId (du tour précédent, y compris byes virtuels)
 
   // On fusionne matchs réels + byes du 1er tour, dans l'ordre des pairIndex,
   // pour connaître qui/quoi arrive au tour 2.
@@ -552,24 +550,9 @@ export async function generateBracket(categoryId) {
 // =======================================================================
 
 /**
- * Vérifie si un joueur est actuellement en train de jouer (n'importe
- * quel match, n'importe quel tableau).
- */
-async function isPlayerCurrentlyPlaying(playerId) {
-  const { data, error } = await supabase
-    .from('matches')
-    .select('id')
-    .or(`player1_id.eq.${playerId},player2_id.eq.${playerId}`)
-    .eq('status', 'playing')
-    .limit(1);
-  if (error) throw new Error(`Erreur vérification disponibilité joueur : ${error.message}`);
-  return data.length > 0;
-}
-
-/**
  * Version "batch" : vérifie une liste de joueurs en une seule requête
- * (bien plus performant que d'appeler isPlayerCurrentlyPlaying en boucle
- * quand la file d'attente est longue).
+ * (bien plus performant que de multiplier les appels individuels quand la
+ * file d'attente est longue).
  */
 async function getBusyPlayerIds(playerIds) {
   if (playerIds.length === 0) return new Set();

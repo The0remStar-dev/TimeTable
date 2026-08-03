@@ -50,13 +50,11 @@ const getInitials = (name) => {
 export default function DashboardPage({
   tables,
   queue,
-  settings,
   tableFilter,
   setTableFilter,
   activeTablesCount,
   freeTablesCount,
   playedMatchesCount,
-  players,
   onAutoAssign,
   onAssignSpecificMatch,
   onOpenScore,

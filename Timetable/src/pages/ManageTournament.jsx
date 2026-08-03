@@ -56,7 +56,7 @@ export default function ManageTournament() {
   const handleAddPlayer = async (e) => {
     e.preventDefault();
     setError(null);
-    const res = await addPlayerWithCategories({ name: playerName, points: parseInt(playerPoints, 10) }, selectedCats);
+    const res = await addPlayerWithCategories({ name: playerName, points: parseInt(playerPoints, 10), fftt_points: parseInt(playerPoints, 10) }, selectedCats);
     if (res.success) {
       setPlayerName('');
       setSelectedCats([]);

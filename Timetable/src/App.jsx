@@ -1,14 +1,128 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Clock, X } from 'lucide-react';
+import { X } from 'lucide-react';
 
 import Sidebar from './components/Sidebar';
 import DashboardPage from './pages/DashboardPage';
-import PoulesPage from './pages/PoulesPage';
 import PlayersPage from './pages/PlayersPage';
 import PaymentsPage from './pages/PaymentsPage';
 import SettingsPage from './pages/SettingsPage';
 import ManageTournament from './pages/ManageTournament';
 import { useTournament } from './contexts/TournamentContext';
+
+const normalizeTableStatus = (status) => {
+  const value = String(status || '').trim().toUpperCase();
+  if (['BUSY', 'EN COURS', 'PLAYING', 'OCCUPE'].includes(value)) return 'EN COURS';
+  if (['FREE', 'DISPONIBLE', 'AVAILABLE', 'LIBRE'].includes(value)) return 'DISPONIBLE';
+  return value || 'DISPONIBLE';
+};
+
+const getPlayerName = (player) => player?.full_name || player?.name || 'Joueur inconnu';
+const getPlayerById = (playerId, players) => players.find((player) => player.id === playerId);
+
+const buildPouleQueue = (matches, players) => {
+  const byPoule = new Map();
+  matches.forEach((match) => {
+    if (match.round_type !== 'poule' || !match.poule_id) return;
+    if (!byPoule.has(match.poule_id)) {
+      byPoule.set(match.poule_id, {
+        id: match.poule_id,
+        type: 'poule',
+        label: `Poule ${String(match.poule_id).slice(0, 4)}`,
+        category: 'Tableau principal',
+        matchIds: [],
+        players: [],
+      });
+    }
+
+    const entry = byPoule.get(match.poule_id);
+    entry.matchIds.push(match.id);
+    const p1 = getPlayerById(match.player1_id, players);
+    const p2 = getPlayerById(match.player2_id, players);
+    if (p1) entry.players.push(p1.id);
+    if (p2) entry.players.push(p2.id);
+  });
+
+  return Array.from(byPoule.values()).map((entry) => ({
+    ...entry,
+    players: [...new Set(entry.players)],
+    matchCount: entry.matchIds.length,
+    label: `Poule ${String(entry.id).slice(0, 4)} - ${entry.matchCount} matchs`,
+  }));
+};
+
+const buildBracketQueue = (matches, players) =>
+  matches
+    .filter((match) => match.round_type !== 'poule' && match.status === 'scheduled')
+    .map((match) => {
+      const p1 = getPlayerById(match.player1_id, players);
+      const p2 = getPlayerById(match.player2_id, players);
+      return {
+        id: match.id,
+        type: 'bracket',
+        label: `${match.round_type || 'Tour'} · ${getPlayerName(p1)} vs ${getPlayerName(p2)}`,
+        category: 'Tableau final',
+        players: [match.player1_id, match.player2_id].filter(Boolean),
+        matchId: match.id,
+      };
+    });
+
+const parseScoreNumber = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const formatScore = (match) => {
+  if (match?.score && typeof match.score === 'string' && match.score.includes('-')) {
+    return match.score;
+  }
+
+  const score1 = parseScoreNumber(match?.score1);
+  const score2 = parseScoreNumber(match?.score2);
+  if (score1 !== null || score2 !== null) {
+    return `${score1 ?? 0}-${score2 ?? 0}`;
+  }
+  return 'Score non saisi';
+};
+
+const buildTableContext = (table, matches, players) => {
+  const assignedMatches = matches
+    .filter((match) => match.table_id === table.id)
+    .filter((match) => ['playing', 'completed', 'scheduled'].includes(String(match.status || '').toLowerCase()))
+    .sort((a, b) => new Date(b.started_at || b.created_at || 0) - new Date(a.started_at || a.created_at || 0));
+
+  const match = assignedMatches[0];
+  if (!match) return null;
+
+  const player1 = getPlayerById(match.player1_id, players) || { id: match.player1_id, name: 'Joueur 1' };
+  const player2 = getPlayerById(match.player2_id, players) || { id: match.player2_id, name: 'Joueur 2' };
+  const status = String(match.status || '').toLowerCase();
+
+  return {
+    type: 'match',
+    match,
+    label:
+      match.round_type === 'poule'
+        ? `Poule ${String(match.poule_id || 'active').slice(0, 4)}`
+        : match.round_type || 'Match',
+    category: match.category_name || match.category || 'Tableau principal',
+    roundLabel: match.round_type || 'Match',
+    player1: { ...player1, name: getPlayerName(player1) },
+    player2: { ...player2, name: getPlayerName(player2) },
+    score: formatScore(match),
+    score1: parseScoreNumber(match.score1),
+    score2: parseScoreNumber(match.score2),
+    startedAt: match.started_at || null,
+    finishedAt: match.finished_at || null,
+    status:
+      status === 'completed'
+        ? 'Terminé'
+        : status === 'playing'
+          ? 'Match actif'
+          : 'Programmé',
+    tableStatus: normalizeTableStatus(table.status),
+  };
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -37,62 +151,18 @@ export default function App() {
     tables: ctxTables,
     assignMatchToTable,
     autoAssignMatches,
-    completeMatch
+    completeMatch,
+    assignPouleToTable,
+    submitPouleMatchResult,
+    generateBracket,
   } = tournament || {};
 
-  // derive played matches count from matches fetched from Supabase
   useEffect(() => {
     if (!matches) return;
-    const played = matches.filter((m) => m.status && ['played', 'finished', 'completed'].includes(String(m.status).toLowerCase()));
+    const played = matches.filter((match) => match.status && ['played', 'finished', 'completed'].includes(String(match.status).toLowerCase()));
     setPlayedMatchesCount(played.length);
   }, [matches]);
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTables((currentTables) =>
-        currentTables.map((table) => {
-          if (table.status === 'EN COURS' && table.match) {
-            return {
-              ...table,
-              match: {
-                ...table.match,
-                elapsedSeconds: table.match.elapsedSeconds + 1
-              }
-            };
-          }
-          return table;
-        })
-      );
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, []);
-
-  // derive queue from matches + players
-  useEffect(() => {
-    if (!matches || matches.length === 0) return;
-    const toQueue = matches
-      .filter((m) => m.status && String(m.status).toLowerCase() === 'scheduled')
-      .sort((a, b) => new Date(a.scheduled_at || a.created_at) - new Date(b.scheduled_at || b.created_at))
-      .map((m) => {
-        const findPlayer = (idKey) => players.find((p) => p.id === m[idKey] || p.id === m.player1_id || p.id === m.player_id);
-        const p1 = players.find((p) => p.id === m.p1_id || p.id === m.player1_id) || { name: m.p1_name || 'Joueur A', points: m.p1_points || 0 };
-        const p2 = players.find((p) => p.id === m.p2_id || p.id === m.player2_id) || { name: m.p2_name || 'Joueur B', points: m.p2_points || 0 };
-
-        return {
-          id: m.id,
-          p1,
-          p2,
-          category: m.category_name || m.category || 'Catégorie',
-          priority: m.priority || 'Low',
-          estWait: m.estimated_wait || '00:00'
-        };
-      });
-
-    if (toQueue.length > 0) setQueue(toQueue);
-  }, [matches, players]);
-
-  // sync local UI state when context updates
   useEffect(() => {
     if (ctxPlayers) setPlayers(ctxPlayers);
   }, [ctxPlayers]);
@@ -102,16 +172,34 @@ export default function App() {
   }, [ctxMatches]);
 
   useEffect(() => {
-    if (ctxTables) setTables(ctxTables);
-  }, [ctxTables]);
+    if (!ctxTables) return;
+    setTables(
+      ctxTables.map((table) => ({
+        ...table,
+        status: normalizeTableStatus(table.status),
+        context: buildTableContext(table, matches, players),
+      }))
+    );
+  }, [ctxTables, matches, players]);
+
+  useEffect(() => {
+    if (!matches || matches.length === 0 || !players.length) {
+      setQueue([]);
+      return;
+    }
+
+    const scheduled = matches.filter((match) => String(match.status || '').toLowerCase() === 'scheduled');
+    const grouped = [...buildPouleQueue(scheduled, players), ...buildBracketQueue(scheduled, players)].sort((a, b) => (a.type === 'poule' ? -1 : 1));
+    setQueue(grouped);
+  }, [matches, players]);
 
   const activeTablesCount = useMemo(
-    () => tables.filter((table) => table.status === 'EN COURS').length,
+    () => tables.filter((table) => normalizeTableStatus(table.status) === 'EN COURS').length,
     [tables]
   );
 
   const freeTablesCount = useMemo(
-    () => tables.filter((table) => table.status === 'DISPONIBLE').length,
+    () => tables.filter((table) => normalizeTableStatus(table.status) === 'DISPONIBLE').length,
     [tables]
   );
 
@@ -119,24 +207,41 @@ export default function App() {
     if (autoAssignMatches) autoAssignMatches();
   };
 
-  const handleAssignSpecificMatch = (tableId, match) => {
-    if (assignMatchToTable) {
-      assignMatchToTable(match.id, tableId);
+  const handleAssignSpecificMatch = async (tableId, block) => {
+    try {
+      if (block?.type === 'poule' && block?.id) {
+        if (assignPouleToTable) await assignPouleToTable(block.id, tableId);
+      } else if (block?.matchId && assignMatchToTable) {
+        await assignMatchToTable(block.matchId, tableId);
+      }
+      setAssignModalTable(null);
+    } catch (error) {
+      console.error('Assignment failed', error);
     }
-    setAssignModalTable(null);
   };
 
-  const handleSaveScore = () => {
+  const handleSaveScore = async () => {
     if (!scoreModalTable) return;
-    // call context to complete the match
-    if (completeMatch && scoreModalTable.match) {
-      const matchId = scoreModalTable.match.id;
-      const tableId = scoreModalTable.id;
-      const scoreStr = scores.map((s) => `${s.p1 || 0}-${s.p2 || 0}`).join(',');
-      completeMatch(matchId, scoreStr, tableId).then(() => {
-        setScoreModalTable(null);
-        setScores(Array.from({ length: 5 }).map(() => ({ p1: '', p2: '' })));
-      });
+
+    try {
+      const activeMatch = scoreModalTable.context?.match || scoreModalTable.match;
+
+      if (scoreModalTable.context?.type === 'match' && activeMatch && submitPouleMatchResult) {
+        const score = scores.find((set) => Number(set.p1 || 0) > 0 || Number(set.p2 || 0) > 0) || { p1: 0, p2: 0 };
+        const p1 = Number(score.p1 || 0);
+        const p2 = Number(score.p2 || 0);
+        const winnerId = p1 > p2 ? activeMatch.player1_id : p2 > p1 ? activeMatch.player2_id : null;
+        await submitPouleMatchResult(activeMatch.id, p1, p2, winnerId || undefined);
+      } else if (activeMatch && completeMatch) {
+        const tableId = scoreModalTable.id;
+        const scoreStr = scores.map((set) => `${set.p1 || 0}-${set.p2 || 0}`).join(',');
+        await completeMatch(activeMatch.id, scoreStr, tableId);
+      }
+
+      setScoreModalTable(null);
+      setScores(Array.from({ length: 5 }).map(() => ({ p1: '', p2: '' })));
+    } catch (error) {
+      console.error('Score save failed', error);
     }
   };
 
@@ -190,13 +295,13 @@ export default function App() {
         {activeTab === 'parametres' && <SettingsPage settings={settings} setSettings={setSettings} />}
       </div>
 
-      {scoreModalTable && scoreModalTable.match && (
+      {scoreModalTable && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden border border-slate-200">
             <div className="p-4 bg-slate-900 text-white flex justify-between items-center">
               <div>
                 <h3 className="font-bold text-sm">Saisie du Score - {scoreModalTable.name}</h3>
-                <p className="text-[11px] text-slate-400">{scoreModalTable.match.category}</p>
+                <p className="text-[11px] text-slate-400">{scoreModalTable.context?.label || scoreModalTable.match?.category || 'Match'}</p>
               </div>
               <button onClick={() => setScoreModalTable(null)} className="text-slate-400 hover:text-white p-1 rounded-lg">
                 <X className="w-5 h-5" />
@@ -204,16 +309,25 @@ export default function App() {
             </div>
 
             <div className="p-6 space-y-6">
-              <div className="grid grid-cols-2 gap-4 text-center">
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
-                  <p className="font-bold text-xs text-slate-800">{scoreModalTable.match.p1.name}</p>
-                  <p className="text-[10px] text-slate-500">{scoreModalTable.match.p1.club}</p>
+              {scoreModalTable.context?.type === 'poule' ? (
+                <div className="space-y-3">
+                  {scoreModalTable.context.matches.map((match) => (
+                    <div key={match.id} className="p-3 border border-slate-200 rounded-xl">
+                      <p className="text-[10px] font-bold uppercase text-slate-500">{match.label}</p>
+                      <p className="text-sm font-semibold text-slate-800">{match.p1} vs {match.p2}</p>
+                    </div>
+                  ))}
                 </div>
-                <div className="p-3 bg-blue-50 rounded-xl border border-blue-200">
-                  <p className="font-bold text-xs text-blue-900">{scoreModalTable.match.p2.name}</p>
-                  <p className="text-[10px] text-blue-700">{scoreModalTable.match.p2.club}</p>
+              ) : (
+                <div className="grid grid-cols-2 gap-4 text-center">
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                    <p className="font-bold text-xs text-slate-800">{scoreModalTable.context?.p1 || scoreModalTable.match?.p1?.name}</p>
+                  </div>
+                  <div className="p-3 bg-blue-50 rounded-xl border border-blue-200">
+                    <p className="font-bold text-xs text-blue-900">{scoreModalTable.context?.p2 || scoreModalTable.match?.p2?.name}</p>
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div className="space-y-3">
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-wider text-center">Scores par manche</p>
@@ -270,30 +384,28 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden border border-slate-200 flex flex-col max-h-[80vh]">
             <div className="p-4 bg-slate-900 text-white flex justify-between items-center shrink-0">
-              <h3 className="font-bold text-sm">Assigner un match à la {assignModalTable.name}</h3>
+              <h3 className="font-bold text-sm">Assigner un bloc à la {assignModalTable.name}</h3>
               <button onClick={() => setAssignModalTable(null)} className="text-slate-400 hover:text-white p-1 rounded-lg">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="p-4 flex-1 overflow-y-auto space-y-3">
-              <p className="text-xs font-medium text-slate-500 mb-2">Choisissez le match à lancer :</p>
+              <p className="text-xs font-medium text-slate-500 mb-2">Choisissez le bloc à lancer :</p>
               {queue.length === 0 ? (
-                <p className="text-xs text-slate-400 text-center py-6">Aucun match disponible en file d'attente</p>
+                <p className="text-xs text-slate-400 text-center py-6">Aucun bloc disponible en file d'attente</p>
               ) : (
-                queue.map((match) => (
+                queue.map((item) => (
                   <div
-                    key={match.id}
+                    key={item.id}
                     className="p-3 border border-slate-200 rounded-xl hover:border-emerald-300 hover:bg-emerald-50/40 transition-all flex justify-between items-center text-xs"
                   >
                     <div>
-                      <p className="font-bold text-slate-800">
-                        {match.p1.name} vs {match.p2.name}
-                      </p>
-                      <p className="text-[10px] text-slate-500">{match.category}</p>
+                      <p className="font-bold text-slate-800">{item.label}</p>
+                      <p className="text-[10px] text-slate-500">{item.category}</p>
                     </div>
                     <button
-                      onClick={() => handleAssignSpecificMatch(assignModalTable.id, match)}
+                      onClick={() => handleAssignSpecificMatch(assignModalTable.id, item)}
                       className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] rounded-lg transition-colors"
                     >
                       Lancer ici

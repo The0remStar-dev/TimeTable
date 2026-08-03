@@ -1,5 +1,20 @@
 import { supabase } from './supabaseClient';
 
+const getAvailablePlayerRatingColumns = async () => {
+  try {
+    const { data, error } = await supabase
+      .from('information_schema.columns')
+      .select('column_name')
+      .eq('table_schema', 'public')
+      .eq('table_name', 'players');
+
+    if (error || !data) return [];
+    return data.map((col) => col.column_name);
+  } catch (err) {
+    return [];
+  }
+};
+
 // A. Créer une nouvelle catégorie (tableau) pour un tournoi
 export const createCategory = async (tournamentId, name, startTime) => {
   if (!tournamentId || String(tournamentId) === '1') return { data: null, error: new Error('Invalid tournament id') };
@@ -18,16 +33,29 @@ export const createPlayerWithCategories = async (tournamentId, playerData, categ
       throw new Error('Un joueur ne peut pas être inscrit dans plus de 2 tableaux.');
     }
 
+    const rating = Number(playerData.fftt_points ?? playerData.points ?? 500);
+    const availableRatingColumns = await getAvailablePlayerRatingColumns();
+
     // 1. Inscription du joueur
+    const playerPayload = {
+      tournament_id: tournamentId,
+      name: playerData.name,
+      email: playerData.email || null,
+      payment_status: playerData.payment_status || 'unpaid',
+    };
+
+    if (rating !== undefined && rating !== null) {
+      if (availableRatingColumns.includes('fftt_points')) {
+        playerPayload.fftt_points = rating;
+      }
+      if (availableRatingColumns.includes('points')) {
+        playerPayload.points = rating;
+      }
+    }
+
     const { data: player, error: playerError } = await supabase
       .from('players')
-      .insert([{
-        tournament_id: tournamentId,
-        name: playerData.name,
-        points: playerData.points || 500,
-        email: playerData.email || null,
-        payment_status: playerData.payment_status || 'unpaid',
-      }])
+      .insert([playerPayload])
       .select()
       .single();
 

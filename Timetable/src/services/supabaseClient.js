@@ -3,20 +3,26 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-// Création du client unique pour toute l'application
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.warn('Supabase: variables VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY manquantes.');
+}
 
-// Test de connexion direct
+// Création du client unique pour toute l'application
+export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '');
+
+// Test de connexion direct uniquement en dev et sans bruit inutile
 async function testConnection() {
-  console.log("🔄 Test de connexion à Supabase en cours...");
-  
-  // Requête ultra-simple pour interroger la base
-  const { data, error } = await supabase.from('tournaments').select('count', { count: 'exact' });
+  if (!supabaseUrl || !supabaseAnonKey) return;
+  if (import.meta.env.PROD) return;
+
+  console.log('🔄 Test de connexion à Supabase en cours...');
+
+  const { error } = await supabase.from('tournaments').select('count', { count: 'exact' });
 
   if (error) {
-    console.error("❌ ÉCHEC DE CONNEXION :", error.message);
+    console.warn('⚠️ Supabase non prêt ou schéma non synchronisé :', error.message);
   } else {
-    console.log("✅ SUPABASE EST PARFAITEMENT CONNECTÉ !");
+    console.log('✅ SUPABASE EST PARFAITEMENT CONNECTÉ !');
   }
 }
 

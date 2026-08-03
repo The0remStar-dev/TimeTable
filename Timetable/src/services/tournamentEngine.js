@@ -255,7 +255,7 @@ export async function generateBracket(categoryId) {
 
   const { data: catPlayers, error: cpError } = await supabase
     .from('category_players')
-    .select('player_id, players(id, fftt_points, full_name)')
+    .select('player_id, players(id, full_name, name, points)')
     .eq('category_id', categoryId);
   if (cpError) throw new Error(`Erreur lecture joueurs : ${cpError.message}`);
 
@@ -263,6 +263,8 @@ export async function generateBracket(categoryId) {
   catPlayers.forEach((cp) => {
     playerById[cp.player_id] = cp.players;
   });
+
+  const playerRating = (player) => Number(player?.fftt_points ?? player?.points ?? 0);
 
   const firsts = [];
   const seconds = [];
@@ -275,7 +277,7 @@ export async function generateBracket(categoryId) {
       involvedIds.add(m.player1_id);
       involvedIds.add(m.player2_id);
     });
-    const players = [...involvedIds].map((id) => ({ id, fftt_points: playerById[id]?.fftt_points ?? 0 }));
+    const players = [...involvedIds].map((id) => ({ id, fftt_points: playerRating(playerById[id]) }));
 
     const ranking = rankPoulePlayers(matches, players);
 
@@ -288,10 +290,10 @@ export async function generateBracket(categoryId) {
 
   const { data: directQualifiers } = await supabase
     .from('category_players')
-    .select('player_id, players(id, fftt_points)')
+    .select('player_id, players(id, full_name, name, points)')
     .eq('category_id', categoryId)
     .eq('status', 'in_bracket');
-  const directList = (directQualifiers || []).map((r) => ({ id: r.player_id, fftt_points: r.players?.fftt_points ?? 0 }));
+  const directList = (directQualifiers || []).map((r) => ({ id: r.player_id, fftt_points: playerRating(r.players) }));
 
   if (eliminatedIds.length > 0) {
     const { error: elimError } = await supabase
@@ -532,53 +534,6 @@ export async function launchNextMatches(categoryId = null, tournamentId = null) 
 
   return { assigned, skipped };
 }
-
-  const [freeTables, queue] = await Promise.all([
-    getFreeTables(),
-    getScheduledQueue(categoryId),
-  ]);
-
-  if (freeTables.length === 0) {
-    return { assigned: [], reason: 'no_free_tables' };
-  }
-  if (queue.length === 0) {
-    return { assigned: [], reason: 'empty_queue' };
-  }
-
-  const allPlayerIds = [...new Set(queue.flatMap((q) => q.players))];
-  const busyPlayers = await getBusyPlayerIds(allPlayerIds);
-
-  const assigned = [];
-  const skipped = [];
-  let tableIndex = 0;
-
-  for (const item of queue) {
-    if (tableIndex >= freeTables.length) break;
-
-    const collision = item.players.some((pid) => busyPlayers.has(pid));
-    if (collision) {
-      skipped.push({ ...item, reason: 'player_already_playing' });
-      continue;
-    }
-
-    const table = freeTables[tableIndex];
-    try {
-      if (item.type === 'poule') {
-        await assignPouleToTable(item.pouleId, table.id);
-      } else {
-        await assignBracketMatchToTable(item.matchId, table.id);
-      }
-      assigned.push({ ...item, tableId: table.id });
-      item.players.forEach((pid) => busyPlayers.add(pid));
-      tableIndex += 1;
-    } catch (err) {
-      skipped.push({ ...item, reason: 'assignment_failed', error: err.message });
-    }
-  }
-
-  return { assigned, skipped };
-  
-
 
 export async function assignBracketMatchToTable(matchId, tableId) {
   const { data: match, error: mErr } = await supabase

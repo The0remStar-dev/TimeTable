@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS public.players (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tournament_id uuid REFERENCES public.tournaments(id) ON DELETE CASCADE,
   name text NOT NULL,
+  full_name text,
   fftt_points integer DEFAULT 0,
+  points integer DEFAULT 0,
   email text,
   payment_status text DEFAULT 'unpaid',
   created_at timestamptz DEFAULT now(),
@@ -94,6 +96,10 @@ ALTER TABLE public.category_players
   ADD COLUMN IF NOT EXISTS status text
     CHECK (status IN ('in_poules','in_bracket','playing','eliminated','winner'))
     DEFAULT 'in_poules';
+
+ALTER TABLE public.players
+  ADD COLUMN IF NOT EXISTS full_name text,
+  ADD COLUMN IF NOT EXISTS points integer DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_matches_playing_p1
   ON public.matches (player1_id) WHERE status = 'playing';

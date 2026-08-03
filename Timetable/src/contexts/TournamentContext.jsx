@@ -1,9 +1,17 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { createCategory, createPlayerWithCategories, fetchCategoriesWithCounts } from '../services/tournamentService';
-import { launchNextMatches, assignBracketMatchToTable, assignPouleToTable } from '../services/tournamentEngine';
+import {
+  launchNextMatches,
+  assignBracketMatchToTable,
+  assignPouleToTable,
+  submitPouleMatchResult,
+  generateBracket
+} from '../services/tournamentEngine';
 
 const TournamentContext = createContext(null);
+
+const getPlayerRating = (player = {}) => Number(player?.fftt_points ?? player?.points ?? 0);
 
 export function useTournament() {
   return useContext(TournamentContext);
@@ -25,8 +33,27 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
 
   const loadPlayers = useCallback(async () => {
     if (!tournamentId) return;
-    const { data } = await supabase.from('players').select('*').eq('tournament_id', tournamentId).order('name');
-    if (data) setPlayers(data);
+    const { data } = await supabase
+      .from('players')
+      .select('*, category_players(status, categories(name))')
+      .eq('tournament_id', tournamentId)
+      .order('name');
+
+    if (data) {
+      const normalized = data.map((player) => {
+        const assignedStatus = player.category_players?.[0]?.status || 'in_poules';
+        const assignedCategory = player.category_players?.[0]?.categories?.name || 'Tableau principal';
+        return {
+          ...player,
+          name: player.name || player.full_name || 'Joueur',
+          fftt_points: getPlayerRating(player),
+          points: player.points ?? getPlayerRating(player),
+          status: assignedStatus,
+          category: assignedCategory,
+        };
+      });
+      setPlayers(normalized);
+    }
   }, [tournamentId]);
 
   const loadMatches = useCallback(async () => {
@@ -146,14 +173,14 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
     try {
       const { data: match, error: matchErr } = await supabase
         .from('matches')
-        .select('poule_id, status')
+        .select('poule_id, status, round_type')
         .eq('id', matchId)
         .single();
       if (matchErr) throw matchErr;
       if (!match) throw new Error('Match introuvable.');
 
-      if (match.poule_id) {
-        await assignPouleToTable(match.poule_id, tableId);
+      if (match.poule_id || match.round_type === 'poule') {
+        await assignPouleToTable(match.poule_id || matchId, tableId);
       } else {
         await assignBracketMatchToTable(matchId, tableId);
       }
@@ -199,6 +226,9 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
     addPlayerWithCategories,
     createTournament,
     assignMatchToTable,
+    assignPouleToTable,
+    submitPouleMatchResult,
+    generateBracket,
     completeMatch,
     autoAssignMatches
   };

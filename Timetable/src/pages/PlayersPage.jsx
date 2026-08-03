@@ -1,10 +1,20 @@
 import { Search, Filter, Check, AlertCircle } from 'lucide-react';
 
+const statusConfig = {
+  in_poules: { label: 'En Poule', className: 'bg-blue-100 text-blue-700 border-blue-200' },
+  in_bracket: { label: 'En 16ème', className: 'bg-orange-100 text-orange-700 border-orange-200' },
+  eliminated: { label: 'Éliminé', className: 'bg-red-100 text-red-700 border-red-200' },
+  winner: { label: 'Vainqueur', className: 'bg-yellow-100 text-yellow-700 border-yellow-200' },
+  playing: { label: 'En cours', className: 'bg-violet-100 text-violet-700 border-violet-200' },
+};
+
 export default function PlayersPage({ players, playerSearch, setPlayerSearch, playerCatFilter, setPlayerCatFilter }) {
   const filteredPlayers = players.filter((player) => {
+    const playerName = String(player.name || '').toLowerCase();
+    const clubName = String(player.club || '').toLowerCase();
     const matchesSearch =
-      player.name.toLowerCase().includes(playerSearch.toLowerCase()) ||
-      player.club.toLowerCase().includes(playerSearch.toLowerCase());
+      playerName.includes(playerSearch.toLowerCase()) ||
+      clubName.includes(playerSearch.toLowerCase());
     const matchesCat = playerCatFilter === 'Tous' || player.category === playerCatFilter;
     return matchesSearch && matchesCat;
   });
@@ -46,34 +56,37 @@ export default function PlayersPage({ players, playerSearch, setPlayerSearch, pl
                 <th className="py-3 px-4">Nom Joueur</th>
                 <th className="py-3 px-4">Club</th>
                 <th className="py-3 px-4 text-center">Points FFTT</th>
-                <th className="py-3 px-4">Catégorie</th>
+                <th className="py-3 px-4">Statut</th>
                 <th className="py-3 px-4 text-center">Paiement</th>
-                <th className="py-3 px-4 text-center">Matchs Joués</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {filteredPlayers.map((player) => (
-                <tr key={player.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="py-3 px-4 font-bold text-slate-900">{player.name}</td>
-                  <td className="py-3 px-4 text-slate-600">{player.club}</td>
-                  <td className="py-3 px-4 text-center font-semibold text-slate-700">{player.pts} pts</td>
-                  <td className="py-3 px-4">
-                    <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full text-[11px] font-semibold">{player.category}</span>
-                  </td>
-                  <td className="py-3 px-4 text-center">
-                    {player.paid ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-[10px] font-bold border border-emerald-200">
-                        <Check className="w-3 h-3" /> Payé
+              {filteredPlayers.map((player) => {
+                const status = statusConfig[player.status] || { label: 'En Poule', className: 'bg-blue-100 text-blue-700 border-blue-200' };
+                return (
+                  <tr key={player.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="py-3 px-4 font-bold text-slate-900">{player.name}</td>
+                    <td className="py-3 px-4 text-slate-600">{player.club || player.category || '—'}</td>
+                    <td className="py-3 px-4 text-center font-semibold text-slate-700">{Number(player.fftt_points ?? player.points ?? player.pts ?? 0)} pts</td>
+                    <td className="py-3 px-4">
+                      <span className={`inline-flex items-center border px-2 py-0.5 rounded-full text-[11px] font-semibold ${status.className}`}>
+                        {status.label}
                       </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full text-[10px] font-bold border border-amber-200">
-                        <AlertCircle className="w-3 h-3" /> En attente
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-3 px-4 text-center font-bold text-slate-900">{player.played}</td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="py-3 px-4 text-center">
+                      {player.paid ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-[10px] font-bold border border-emerald-200">
+                          <Check className="w-3 h-3" /> Payé
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full text-[10px] font-bold border border-amber-200">
+                          <AlertCircle className="w-3 h-3" /> En attente
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

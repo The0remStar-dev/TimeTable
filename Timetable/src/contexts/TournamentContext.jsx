@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
+import { isUuid } from '../utils/helpers';
 import {
   createCategory,
   createPlayerWithCategories,
@@ -22,6 +23,39 @@ const TournamentContext = createContext(null);
 
 const getPlayerRating = (player = {}) => Number(player?.fftt_points ?? player?.points ?? 0);
 
+const DEFAULT_TABLES_COUNT = 10;
+
+// Un tournoi sans lignes dans `tables` ne peut lancer aucun match :
+// on provisionne les tables physiques à la sélection du tournoi.
+async function ensureTables(tournament) {
+  if (!isUuid(tournament?.id)) return;
+
+  const { data: existing, error } = await supabase
+    .from('tables')
+    .select('id')
+    .eq('tournament_id', tournament.id)
+    .limit(1);
+
+  if (error) {
+    console.error('[TournamentContext] Erreur lecture des tables', error);
+    return;
+  }
+  if (existing.length > 0) return;
+
+  const count = Number(tournament.tables_count) || DEFAULT_TABLES_COUNT;
+  const rows = Array.from({ length: count }, (_, index) => ({
+    tournament_id: tournament.id,
+    number: index + 1,
+    name: `Table ${index + 1}`,
+    status: 'free',
+  }));
+
+  const { error: insertError } = await supabase.from('tables').insert(rows);
+  if (insertError) {
+    console.error('[TournamentContext] Erreur création des tables', insertError);
+  }
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export function useTournament() {
   return useContext(TournamentContext);
@@ -36,13 +70,13 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
   const [matches, setMatches] = useState([]);
 
   const loadTables = useCallback(async () => {
-    if (!tournamentId) return;
-    const { data } = await supabase.from('tables').select('*').eq('tournament_id', tournamentId).order('id');
+    if (!isUuid(tournamentId)) return;
+    const { data } = await supabase.from('tables').select('*').eq('tournament_id', tournamentId).order('number');
     if (data) setTables(data);
   }, [tournamentId]);
 
   const loadPlayers = useCallback(async () => {
-    if (!tournamentId) return;
+    if (!isUuid(tournamentId)) return;
     const { data } = await supabase
       .from('players')
       .select('*, category_players(status, category_id, categories(name))')
@@ -74,14 +108,32 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
     }
   }, [tournamentId]);
 
+  // Les matchs ne portent pas de tournament_id : ils sont rattachés aux tableaux
+  // (categories) du tournoi.
   const loadMatches = useCallback(async () => {
-    if (!tournamentId) return;
-    const { data } = await supabase.from('matches').select('*').eq('tournament_id', tournamentId).order('created_at');
+    if (!isUuid(tournamentId)) return;
+
+    const { data: categoryRows } = await supabase
+      .from('categories')
+      .select('id')
+      .eq('tournament_id', tournamentId);
+
+    const categoryIds = (categoryRows || []).map((category) => category.id).filter(isUuid);
+    if (categoryIds.length === 0) {
+      setMatches([]);
+      return;
+    }
+
+    const { data } = await supabase
+      .from('matches')
+      .select('*')
+      .in('category_id', categoryIds)
+      .order('created_at');
     if (data) setMatches(data);
   }, [tournamentId]);
 
   const loadCategories = useCallback(async () => {
-    if (!tournamentId) return;
+    if (!isUuid(tournamentId)) return;
     const res = await fetchCategoriesWithCounts(tournamentId);
     if (res.data) setCategories(res.data);
   }, [tournamentId]);
@@ -93,8 +145,38 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
     loadCategories();
   }, [loadTables, loadPlayers, loadMatches, loadCategories]);
 
+  // Reprise de session : sans tournoi explicite on repart du dernier créé,
+  // ce qui évite tout identifiant de repli codé en dur.
   useEffect(() => {
-    if (!tournamentId || String(tournamentId) === '1') return undefined;
+    if (tournamentId) return;
+
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('tournaments')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) {
+        console.error('[TournamentContext] Erreur chargement du dernier tournoi', error);
+        return;
+      }
+      if (cancelled || !data) return;
+
+      await ensureTables(data);
+      setCurrentTournament(data);
+      setTournamentId(data.id);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tournamentId]);
+
+  useEffect(() => {
+    if (!isUuid(tournamentId)) return undefined;
 
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadAll();
@@ -111,7 +193,7 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
 
     const matchesSub = supabase
       .channel('public:matches')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches', filter: `tournament_id=eq.${tournamentId}` }, () => loadMatches())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, () => loadMatches())
       .subscribe();
 
     const categoriesSub = supabase
@@ -145,6 +227,7 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
       const { data, error } = await supabase.from('tournaments').insert([{ name, status: 'draft', code: generatedCode }]).select().single();
       if (error) return { success: false, error: error.message || error };
       if (data) {
+        await ensureTables(data);
         setCurrentTournament(data);
         setTournamentId(data.id);
         // load related data
@@ -225,7 +308,9 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
         await supabase.from('matches').update({ status: 'completed', score, table_id: null, finished_at: new Date().toISOString() }).eq('id', matchId);
       }
 
-      await supabase.from('tables').update({ status: 'DISPONIBLE' }).eq('id', tableId);
+      if (isUuid(tableId)) {
+        await supabase.from('tables').update({ status: 'free' }).eq('id', tableId);
+      }
       
       // Trigger immediate state refreshes for realtime updates
       loadMatches();
@@ -240,7 +325,8 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
   };
 
   const autoAssignMatches = async () => {
-    const result = await launchNextMatches(null, tournamentId);
+    const categoryIds = categories.map((category) => category.id).filter(isUuid);
+    const result = await launchNextMatches(categoryIds, tournamentId);
     if (result.assigned?.length) {
       // Trigger immediate state refreshes for realtime updates
       loadMatches();

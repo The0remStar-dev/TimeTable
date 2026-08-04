@@ -102,7 +102,7 @@ export default function ManageTournament() {
         players: playersInCategory.length,
       });
 
-      const result = await generatePoules(category.id, playersInCategory, currentTournament?.id ?? null);
+      const result = await generatePoules(category.id, playersInCategory);
       if (result && result.poules) {
         const { error: categoryUpdateError } = await supabase
           .from('categories')

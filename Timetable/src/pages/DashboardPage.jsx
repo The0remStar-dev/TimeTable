@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect, useState } from 'react';
 import {
   Trophy,
   RefreshCw,
@@ -47,6 +47,16 @@ const getInitials = (name) => {
     .toUpperCase();
 };
 
+const getElapsedDisplay = (startedAt, now = Date.now()) => {
+  if (!startedAt) return '00:00 min';
+  const startedMs = new Date(startedAt).getTime();
+  if (Number.isNaN(startedMs)) return '00:00 min';
+  const totalSeconds = Math.max(0, Math.floor((now - startedMs) / 1000));
+  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+  const seconds = String(totalSeconds % 60).padStart(2, '0');
+  return `${minutes}:${seconds} min`;
+};
+
 export default function DashboardPage({
   tables,
   queue,
@@ -61,6 +71,13 @@ export default function DashboardPage({
   onOpenAssign,
   onRefresh,
 }) {
+  const [now, setNow] = useState(0);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+
   const filteredTables = useMemo(() => {
     if (tableFilter === 'active') return tables.filter((table) => normalizeStatus(table.status) === 'EN COURS');
     if (tableFilter === 'free') return tables.filter((table) => normalizeStatus(table.status) === 'DISPONIBLE');
@@ -148,7 +165,7 @@ export default function DashboardPage({
                   <>
                     <div className="flex items-center gap-1 text-red-600 font-bold text-sm my-1">
                       <span>⏱</span>
-                      <span>{context.status}</span>
+                      <span>{getElapsedDisplay(activeMatch.started_at, now)}</span>
                     </div>
                     <p className="text-slate-400 text-xs font-normal mb-3">{context.label} · {context.category}</p>
 

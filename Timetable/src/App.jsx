@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 
 import Sidebar from './components/Sidebar';
@@ -19,16 +19,17 @@ const normalizeTableStatus = (status) => {
 const getPlayerName = (player) => player?.full_name || player?.name || 'Joueur inconnu';
 const getPlayerById = (playerId, players) => players.find((player) => player.id === playerId);
 
-const buildPouleQueue = (matches, players) => {
+const buildPouleQueue = (matches, players, categories = []) => {
   const byPoule = new Map();
   matches.forEach((match) => {
     if (match.round_type !== 'poule' || !match.poule_id) return;
+    const categoryName = categories.find((cat) => cat.id === match.category_id)?.name || 'Tableau principal';
     if (!byPoule.has(match.poule_id)) {
       byPoule.set(match.poule_id, {
         id: match.poule_id,
         type: 'poule',
         label: `Poule ${String(match.poule_id).slice(0, 4)}`,
-        category: 'Tableau principal',
+        category: categoryName,
         matchIds: [],
         players: [],
       });
@@ -36,6 +37,7 @@ const buildPouleQueue = (matches, players) => {
 
     const entry = byPoule.get(match.poule_id);
     entry.matchIds.push(match.id);
+    entry.category = categoryName;
     const p1 = getPlayerById(match.player1_id, players);
     const p2 = getPlayerById(match.player2_id, players);
     if (p1) entry.players.push(p1.id);
@@ -46,7 +48,7 @@ const buildPouleQueue = (matches, players) => {
     ...entry,
     players: [...new Set(entry.players)],
     matchCount: entry.matchIds.length,
-    label: `Poule ${String(entry.id).slice(0, 4)} - ${entry.matchCount} matchs`,
+    label: `${entry.label} - ${entry.matchCount} matchs`,
   }));
 };
 
@@ -142,6 +144,7 @@ export default function App() {
   const [scores, setScores] = useState(Array.from({ length: 5 }).map(() => ({ p1: '', p2: '' })));
   const [assignModalTable, setAssignModalTable] = useState(null);
   const [tables, setTables] = useState([]);
+  const [toast, setToast] = useState(null);
   const tournament = useTournament();
   const {
     players: ctxPlayers,
@@ -177,8 +180,8 @@ export default function App() {
   const queue = useMemo(() => {
     if (!matches.length || !playersWithState.length) return [];
     const scheduled = matches.filter((match) => String(match.status || '').toLowerCase() === 'scheduled');
-    return [...buildPouleQueue(scheduled, playersWithState), ...buildBracketQueue(scheduled, playersWithState)].sort((a) => (a.type === 'poule' ? -1 : 1));
-  }, [matches, playersWithState]);
+    return [...buildPouleQueue(scheduled, playersWithState, ctxCategories || []), ...buildBracketQueue(scheduled, playersWithState)].sort((a) => (a.type === 'poule' ? -1 : 1));
+  }, [matches, playersWithState, ctxCategories]);
 
   const activeTablesCount = useMemo(
     () => tablesWithState.filter((table) => normalizeTableStatus(table.status) === 'EN COURS').length,
@@ -190,8 +193,31 @@ export default function App() {
     [tablesWithState]
   );
 
-  const handleAutoAssign = () => {
-    if (autoAssignMatches) autoAssignMatches();
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timeout = window.setTimeout(() => setToast(null), 2800);
+    return () => window.clearTimeout(timeout);
+  }, [toast]);
+
+  const notify = (message, type = 'success') => {
+    setToast({ message, type });
+  };
+
+  const handleAutoAssign = async () => {
+    try {
+      if (!autoAssignMatches) return;
+      const result = await autoAssignMatches();
+      if (result?.assigned?.length) {
+        notify(`${result.assigned.length} match(s) assigné(s) à une table`, 'success');
+      } else if (result?.reason === 'empty_queue') {
+        notify('Aucun match programmé dans la file d’attente', 'info');
+      } else if (result?.reason === 'no_free_tables') {
+        notify('Aucune table libre pour lancer un match', 'warning');
+      }
+    } catch (error) {
+      console.error('[App] Erreur autoAssignMatches', error);
+      notify(error.message || 'Erreur lors de l’assignation automatique', 'error');
+    }
   };
 
   const togglePlayerPayment = async (playerId, paid) => {
@@ -212,14 +238,17 @@ export default function App() {
 
   const handleAssignSpecificMatch = async (tableId, block) => {
     try {
+      console.log('[App] Assignation bloc', { tableId, block });
       if (block?.type === 'poule' && block?.id) {
         if (assignPouleToTable) await assignPouleToTable(block.id, tableId);
       } else if (block?.matchId && assignMatchToTable) {
         await assignMatchToTable(block.matchId, tableId);
       }
+      notify('Bloc assigné à la table avec succès', 'success');
       setAssignModalTable(null);
     } catch (error) {
-      console.error('Assignment failed', error);
+      console.error('[App] Assignment failed', error);
+      notify(error.message || 'Erreur d’assignation à la table', 'error');
     }
   };
 
@@ -234,22 +263,32 @@ export default function App() {
         const p1 = Number(score.p1 || 0);
         const p2 = Number(score.p2 || 0);
         const winnerId = p1 > p2 ? activeMatch.player1_id : p2 > p1 ? activeMatch.player2_id : null;
+        console.log('[App] Validation score poule', { matchId: activeMatch.id, p1, p2, winnerId });
         await submitPouleMatchResult(activeMatch.id, p1, p2, winnerId || undefined);
+        notify('Score enregistré, la poule continue ou se termine proprement', 'success');
       } else if (activeMatch && completeMatch) {
         const tableId = scoreModalTable.id;
         const scoreStr = scores.map((set) => `${set.p1 || 0}-${set.p2 || 0}`).join(',');
+        console.log('[App] Validation score tableau final', { matchId: activeMatch.id, scoreStr, tableId });
         await completeMatch(activeMatch.id, scoreStr, tableId);
+        notify('Match terminé et table libérée', 'success');
       }
 
       setScoreModalTable(null);
       setScores(Array.from({ length: 5 }).map(() => ({ p1: '', p2: '' })));
     } catch (error) {
-      console.error('Score save failed', error);
+      console.error('[App] Score save failed', error);
+      notify(error.message || 'Erreur lors de la validation du score', 'error');
     }
   };
 
   return (
     <div className="flex h-screen bg-[#F8FAFC] font-sans antialiased overflow-hidden">
+      {toast && (
+        <div className="fixed top-4 right-4 z-[60] rounded-xl border px-4 py-3 shadow-lg text-sm font-semibold text-white bg-slate-900">
+          {toast.message}
+        </div>
+      )}
       <Sidebar
         activeTab={activeTab}
         onChangeTab={setActiveTab}

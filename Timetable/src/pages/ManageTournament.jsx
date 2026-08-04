@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { supabase } from '../services/supabaseClient';
 import { useTournament } from '../contexts/TournamentContext';
 import { generatePoules } from '../services/tournamentEngine';
 
@@ -72,19 +73,52 @@ export default function ManageTournament() {
     try {
       setError(null);
       setLaunchingCategoryId(category.id);
-      const rows = category.category_players || [];
-      const playersInCategory = rows.map((row) => row.players || row.player || row).filter(Boolean);
+
+      const { data: categoryPlayersData, error: categoryPlayersError } = await supabase
+        .from('category_players')
+        .select('player_id, players(id, name, full_name, fftt_points, points, tournament_id)')
+        .eq('category_id', category.id);
+
+      if (categoryPlayersError) {
+        console.error('[ManageTournament] Erreur lecture players du tableau', categoryPlayersError);
+        throw new Error(categoryPlayersError.message || 'Erreur lecture joueurs du tableau.');
+      }
+
+      const playersInCategory = (categoryPlayersData || [])
+        .map((row) => row.players || { id: row.player_id, player_id: row.player_id })
+        .filter(Boolean)
+        .map((player) => ({
+          ...player,
+          id: player.id ?? player.player_id,
+          name: player.name || player.full_name || 'Joueur',
+        }));
+
       if (playersInCategory.length < 2) {
         throw new Error('Il faut au moins 2 joueurs pour lancer un tableau.');
       }
-      const result = await generatePoules(category.id, playersInCategory);
+
+      console.log('[ManageTournament] Lancement du tableau', {
+        categoryId: category.id,
+        players: playersInCategory.length,
+      });
+
+      const result = await generatePoules(category.id, playersInCategory, currentTournament?.id ?? null);
       if (result && result.poules) {
-        if (window.confirm('Attention, le tableau sera lancé avant l\'heure prévue. Confirmer ?')) {
-          // confirmation explicitement demandée côté UX; le lancement est bien enregistré dans Supabase
+        const { error: categoryUpdateError } = await supabase
+          .from('categories')
+          .update({ status: 'in_progress' })
+          .eq('id', category.id);
+
+        if (categoryUpdateError) {
+          console.error('[ManageTournament] Erreur mise à jour catégorie', categoryUpdateError);
+          throw new Error(categoryUpdateError.message || 'Erreur mise à jour du statut du tableau.');
         }
       }
+
       if (loadAll) await loadAll();
+      window.alert('Tableau lancé avec succès : les poules et les matchs ont bien été créés.');
     } catch (err) {
+      console.error('[ManageTournament] Erreur lancement tableau', err);
       setError(err.message || 'Erreur lors du lancement du tableau.');
     } finally {
       setLaunchingCategoryId(null);

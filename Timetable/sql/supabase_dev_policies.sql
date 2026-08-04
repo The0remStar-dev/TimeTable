@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS public.category_players (
 
 CREATE TABLE IF NOT EXISTS public.matches (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tournament_id uuid REFERENCES public.tournaments(id) ON DELETE CASCADE,
   category_id uuid REFERENCES public.categories(id) ON DELETE CASCADE,
   poule_id uuid,
   next_match_id uuid REFERENCES public.matches(id),
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS public.matches (
 -- 2) SCHEMA MIGRATIONS : add missing columns and indexes
 -- ---------------------------------------------------------------------
 ALTER TABLE public.matches
+  ADD COLUMN IF NOT EXISTS tournament_id uuid REFERENCES public.tournaments(id) ON DELETE CASCADE,
   ADD COLUMN IF NOT EXISTS round_type text
     CHECK (round_type IN ('poule','round_64','round_32','round_16','quarter','semi','final')),
   ADD COLUMN IF NOT EXISTS poule_id uuid,

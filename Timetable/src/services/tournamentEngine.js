@@ -84,7 +84,7 @@ export function distributeSerpentine(sortedPlayers, pouleSizes) {
   return poules;
 }
 
-function buildPouleMatchesPayload(categoryId, pouleId, players) {
+function buildPouleMatchesPayload(categoryId, pouleId, players, tournamentId = null) {
   const matches = [];
 
   if (players.length === 3) {
@@ -97,6 +97,7 @@ function buildPouleMatchesPayload(categoryId, pouleId, players) {
     order.forEach(([p1, p2], i) => {
       matches.push({
         category_id: categoryId,
+        tournament_id: tournamentId,
         poule_id: pouleId,
         round_type: 'poule',
         poule_order: i + 1,
@@ -109,6 +110,7 @@ function buildPouleMatchesPayload(categoryId, pouleId, players) {
     const [A, B] = players;
     matches.push({
       category_id: categoryId,
+      tournament_id: tournamentId,
       poule_id: pouleId,
       round_type: 'poule',
       poule_order: 1,
@@ -121,9 +123,25 @@ function buildPouleMatchesPayload(categoryId, pouleId, players) {
   return matches;
 }
 
-export async function generatePoules(categoryId, playersList) {
+export async function generatePoules(categoryId, playersList, tournamentId = null) {
   if (!playersList || playersList.length === 0) {
     throw new Error('Liste de joueurs vide pour generatePoules');
+  }
+
+  let resolvedTournamentId = tournamentId ?? playersList[0]?.tournament_id ?? null;
+
+  if (!resolvedTournamentId && categoryId) {
+    const { data: categoryRow, error: categoryError } = await supabase
+      .from('categories')
+      .select('tournament_id')
+      .eq('id', categoryId)
+      .single();
+
+    if (categoryError) {
+      console.error('[tournamentEngine] Impossible de lire le tournoi depuis la catégorie', categoryError);
+    } else {
+      resolvedTournamentId = categoryRow?.tournament_id ?? null;
+    }
   }
 
   const sorted = [...playersList].sort((a, b) => (b.fftt_points ?? 0) - (a.fftt_points ?? 0));
@@ -141,12 +159,16 @@ export async function generatePoules(categoryId, playersList) {
     }
     const pouleId = crypto.randomUUID();
     createdPoules.push({ pouleId, players });
-    allMatchesPayload.push(...buildPouleMatchesPayload(categoryId, pouleId, players));
+    allMatchesPayload.push(...buildPouleMatchesPayload(categoryId, pouleId, players, resolvedTournamentId));
   }
 
   if (allMatchesPayload.length > 0) {
+    console.log('[tournamentEngine] Insertion matchs poules', allMatchesPayload.length, { categoryId, tournamentId: resolvedTournamentId });
     const { error: matchError } = await supabase.from('matches').insert(allMatchesPayload);
-    if (matchError) throw new Error(`Erreur création matchs de poules : ${matchError.message}`);
+    if (matchError) {
+      console.error('[tournamentEngine] Erreur insert matches', matchError);
+      throw new Error(`Erreur création matchs de poules : ${matchError.message}`);
+    }
   }
 
   if (soloQualifiers.length > 0) {
@@ -155,7 +177,10 @@ export async function generatePoules(categoryId, playersList) {
       .update({ status: 'in_bracket' })
       .eq('category_id', categoryId)
       .in('player_id', soloQualifiers.map((p) => p.id));
-    if (soloError) throw new Error(`Erreur qualification directe : ${soloError.message}`);
+    if (soloError) {
+      console.error('[tournamentEngine] Erreur qualification directe', soloError);
+      throw new Error(`Erreur qualification directe : ${soloError.message}`);
+    }
   }
 
   const enPoule = poules.flat().filter((p) => !soloQualifiers.includes(p));
@@ -165,7 +190,10 @@ export async function generatePoules(categoryId, playersList) {
       .update({ status: 'in_poules' })
       .eq('category_id', categoryId)
       .in('player_id', enPoule.map((p) => p.id));
-    if (statusError) throw new Error(`Erreur statut in_poules : ${statusError.message}`);
+    if (statusError) {
+      console.error('[tournamentEngine] Erreur statut in_poules', statusError);
+      throw new Error(`Erreur statut in_poules : ${statusError.message}`);
+    }
   }
 
   return {
@@ -191,7 +219,47 @@ export async function submitPouleMatchResult(matchId, score1, score2, winnerId) 
     p_score2: score2,
     p_winner_id: winnerId,
   });
-  if (error) throw new Error(`Erreur en enregistrant le résultat de poule : ${error.message}`);
+  if (error) {
+    console.error('[tournamentEngine] Erreur RPC complete_poule_match', error);
+    throw new Error(`Erreur en enregistrant le résultat de poule : ${error.message}`);
+  }
+
+  try {
+    const { data: matchRow, error: matchError } = await supabase
+      .from('matches')
+      .select('category_id, poule_id')
+      .eq('id', matchId)
+      .single();
+
+    if (matchError) {
+      console.error('[tournamentEngine] Impossible de charger la poule après score', matchError);
+      return data;
+    }
+
+    if (matchRow?.poule_id) {
+      const { data: pouleMatches, error: pouleError } = await supabase
+        .from('matches')
+        .select('id, status')
+        .eq('poule_id', matchRow.poule_id);
+
+      if (pouleError) {
+        console.error('[tournamentEngine] Erreur lecture matches poule', pouleError);
+        return data;
+      }
+
+      const allCompleted = pouleMatches.length > 0 && pouleMatches.every((m) => m.status === 'completed');
+      if (allCompleted && matchRow.category_id) {
+        console.log('[tournamentEngine] Toutes les poules du tableau sont terminées, génération du bracket', {
+          categoryId: matchRow.category_id,
+          pouleId: matchRow.poule_id,
+        });
+        await generateBracket(matchRow.category_id);
+      }
+    }
+  } catch (err) {
+    console.error('[tournamentEngine] Erreur déclenchement bracket', err);
+  }
+
   return data;
 }
 

@@ -15,6 +15,7 @@
 -- ---------------------------------------------------------------------
 
 ALTER TABLE matches
+  ADD COLUMN IF NOT EXISTS tournament_id uuid REFERENCES tournaments(id) ON DELETE CASCADE,
   ADD COLUMN IF NOT EXISTS round_type text
     CHECK (round_type IN ('poule','round_64','round_32','round_16','quarter','semi','final')),
   ADD COLUMN IF NOT EXISTS poule_id uuid,

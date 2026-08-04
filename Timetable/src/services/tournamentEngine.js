@@ -204,6 +204,36 @@ export async function generatePoules(categoryId, playersList, tournamentId = nul
 }
 
 export async function assignPouleToTable(pouleId, tableId) {
+  // First, get all players in this poule to check for conflicts
+  const { data: pouleMatches, error: pouleError } = await supabase
+    .from('matches')
+    .select('player1_id, player2_id')
+    .eq('poule_id', pouleId);
+  
+  if (pouleError) {
+    console.error('[tournamentEngine] Erreur lecture joueurs poule', pouleError);
+  } else {
+    // Get all unique player IDs in this poule
+    const poulePlayerIds = [...new Set([
+      ...pouleMatches.map(m => m.player1_id),
+      ...pouleMatches.map(m => m.player2_id)
+    ].filter(Boolean))];
+
+    // Check if any of these players are currently playing
+    const busyPlayers = await getBusyPlayerIds(poulePlayerIds);
+    const conflicts = [];
+    poulePlayerIds.forEach(pid => {
+      if (busyPlayers.has(pid)) {
+        conflicts.push({ playerId: pid, tableId: busyPlayers.get(pid) });
+      }
+    });
+
+    if (conflicts.length > 0) {
+      const conflictTables = [...new Set(conflicts.map(c => c.tableId))].join(', ');
+      throw new Error(`Un ou plusieurs joueurs de cette poule sont déjà en train de jouer sur les tables ${conflictTables}.`);
+    }
+  }
+
   const { data, error } = await supabase.rpc('assign_poule_to_table', {
     p_poule_id: pouleId,
     p_table_id: tableId,
@@ -249,11 +279,32 @@ export async function submitPouleMatchResult(matchId, score1, score2, winnerId) 
 
       const allCompleted = pouleMatches.length > 0 && pouleMatches.every((m) => m.status === 'completed');
       if (allCompleted && matchRow.category_id) {
-        console.log('[tournamentEngine] Toutes les poules du tableau sont terminées, génération du bracket', {
+        console.log('[tournamentEngine] Poule terminée, vérification si toutes les poules du tableau sont terminées', {
           categoryId: matchRow.category_id,
           pouleId: matchRow.poule_id,
         });
-        await generateBracket(matchRow.category_id);
+
+        // Check if ALL poules in the category are completed
+        const { data: allCategoryPouleMatches, error: allPoulesError } = await supabase
+          .from('matches')
+          .select('id, status, poule_id')
+          .eq('category_id', matchRow.category_id)
+          .eq('round_type', 'poule');
+
+        if (allPoulesError) {
+          console.error('[tournamentEngine] Erreur lecture tous les matches de poules', allPoulesError);
+          return data;
+        }
+
+        const allPoulesCompleted = allCategoryPouleMatches.length > 0 && 
+          allCategoryPouleMatches.every((m) => m.status === 'completed');
+
+        if (allPoulesCompleted) {
+          console.log('[tournamentEngine] Toutes les poules du tableau sont terminées, génération du bracket', {
+            categoryId: matchRow.category_id,
+          });
+          await generateBracket(matchRow.category_id);
+        }
       }
     }
   } catch (err) {
@@ -504,17 +555,17 @@ export async function generateBracket(categoryId) {
 // =======================================================================
 
 async function getBusyPlayerIds(playerIds) {
-  if (playerIds.length === 0) return new Set();
+  if (playerIds.length === 0) return new Map();
   const { data, error } = await supabase
     .from('matches')
-    .select('player1_id, player2_id')
+    .select('player1_id, player2_id, table_id')
     .eq('status', 'playing');
   if (error) throw new Error(`Erreur lecture matchs en cours : ${error.message}`);
 
-  const busy = new Set();
+  const busy = new Map(); // Use Map to store player -> table_id mapping
   data.forEach((m) => {
-    if (m.player1_id) busy.add(m.player1_id);
-    if (m.player2_id) busy.add(m.player2_id);
+    if (m.player1_id) busy.set(m.player1_id, m.table_id);
+    if (m.player2_id) busy.set(m.player2_id, m.table_id);
   });
   return busy;
 }
@@ -579,9 +630,20 @@ export async function launchNextMatches(categoryId = null, tournamentId = null) 
   for (const item of queue) {
     if (tableIndex >= freeTables.length) break;
 
-    const collision = item.players.some((pid) => busyPlayers.has(pid));
-    if (collision) {
-      skipped.push({ ...item, reason: 'player_already_playing' });
+    // Check for player collisions across all categories
+    const collisionInfo = [];
+    item.players.forEach((pid) => {
+      if (busyPlayers.has(pid)) {
+        collisionInfo.push({ playerId: pid, tableId: busyPlayers.get(pid) });
+      }
+    });
+
+    if (collisionInfo.length > 0) {
+      skipped.push({ 
+        ...item, 
+        reason: 'player_already_playing',
+        collisionInfo 
+      });
       continue;
     }
 
@@ -593,7 +655,7 @@ export async function launchNextMatches(categoryId = null, tournamentId = null) 
         await assignBracketMatchToTable(item.matchId, table.id);
       }
       assigned.push({ ...item, tableId: table.id });
-      item.players.forEach((pid) => busyPlayers.add(pid));
+      item.players.forEach((pid) => busyPlayers.set(pid, table.id));
       tableIndex += 1;
     } catch (err) {
       skipped.push({ ...item, reason: 'assignment_failed', error: err.message });
@@ -616,7 +678,8 @@ export async function assignBracketMatchToTable(matchId, tableId) {
 
   const busy = await getBusyPlayerIds([match.player1_id, match.player2_id]);
   if (busy.has(match.player1_id) || busy.has(match.player2_id)) {
-    throw new Error('Un des joueurs est déjà en train de jouer ailleurs.');
+    const conflictingTable = busy.get(match.player1_id) || busy.get(match.player2_id);
+    throw new Error(`Un des joueurs est déjà en train de jouer sur la Table ${conflictingTable}.`);
   }
 
   const { data: table, error: tErr } = await supabase
@@ -651,6 +714,49 @@ export async function submitBracketMatchResult(matchId, score1, score2, winnerId
     p_loser_id: loserId,
   });
   if (error) throw new Error(`Erreur avancement dans l'arbre : ${error.message}`);
+  
+  // Update category player statuses after bracket match completion
+  try {
+    const { data: matchData, error: matchError } = await supabase
+      .from('matches')
+      .select('category_id, round_type')
+      .eq('id', matchId)
+      .single();
+
+    if (matchError) {
+      console.error('[tournamentEngine] Erreur lecture match pour mise à jour statuts', matchError);
+      return data;
+    }
+
+    if (matchData?.category_id && loserId) {
+      // Mark loser as eliminated
+      const { error: elimError } = await supabase
+        .from('category_players')
+        .update({ status: 'eliminated' })
+        .eq('category_id', matchData.category_id)
+        .eq('player_id', loserId);
+      
+      if (elimError) {
+        console.error('[tournamentEngine] Erreur mise à jour statut éliminé', elimError);
+      }
+    }
+
+    // If this was a final match, mark winner as tournament winner
+    if (matchData?.round_type === 'final' && winnerId) {
+      const { error: winnerError } = await supabase
+        .from('category_players')
+        .update({ status: 'winner' })
+        .eq('category_id', matchData.category_id)
+        .eq('player_id', winnerId);
+      
+      if (winnerError) {
+        console.error('[tournamentEngine] Erreur mise à jour statut vainqueur', winnerError);
+      }
+    }
+  } catch (err) {
+    console.error('[tournamentEngine] Erreur mise à jour statuts joueurs', err);
+  }
+
   return data;
 }
 

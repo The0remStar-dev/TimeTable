@@ -211,6 +211,11 @@ export default function DashboardPage({
                               <span className="text-xs font-bold text-slate-500">{queue[0].label}</span>
                             </div>
                           </div>
+                          {queue[0].playerNames && (
+                            <div className="text-xs text-slate-600 font-medium truncate">
+                              {queue[0].playerNames}
+                            </div>
+                          )}
                         </div>
                         <p className="text-xs text-slate-500 font-medium mb-2 mt-3">{queue[0].category}</p>
                         <button
@@ -248,18 +253,46 @@ export default function DashboardPage({
             <div className="text-center py-10 text-slate-400 text-xs">Aucun bloc en file d'attente</div>
           ) : (
             queue.map((block) => (
-              <div key={block.id} className="bg-slate-50/80 border border-slate-200/80 rounded-xl p-3 flex flex-col gap-2 relative">
+              <div 
+                key={block.id} 
+                className={`bg-slate-50/80 border rounded-xl p-3 flex flex-col gap-2 relative ${
+                  block.hasConflict 
+                    ? 'border-red-300 bg-red-50/50' 
+                    : 'border-slate-200/80'
+                }`}
+              >
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md w-fit ${priorityClasses[block.priority || 'Low']}`}>
                   {block.type === 'poule' ? 'BLOC POULE' : 'TABLEAU FINAL'}
                 </span>
 
                 <div className="flex items-center gap-2 mt-1">
-                  <span className="text-sm font-bold text-slate-800">{block.label}</span>
+                  <span className={`text-sm font-bold ${block.hasConflict ? 'text-red-800' : 'text-slate-800'}`}>{block.label}</span>
+                  {block.hasConflict && (
+                    <span className="text-[10px] font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded-full">
+                      ⚠ En conflit
+                    </span>
+                  )}
                 </div>
+
+                {block.playerNames && (
+                  <div className="text-xs text-slate-600 font-medium">
+                    {block.playerNames}
+                  </div>
+                )}
+
+                {block.hasConflict && block.conflictInfo && (
+                  <div className="text-[10px] text-red-600 font-medium bg-red-100 px-2 py-1 rounded">
+                    {block.conflictInfo}
+                  </div>
+                )}
 
                 <div className="flex justify-end">
                   <button
                     onClick={() => {
+                      if (block.hasConflict) {
+                        alert(`Impossible d'assigner: ${block.conflictInfo}`);
+                        return;
+                      }
                       const freeTable = tables.find((table) => normalizeStatus(table.status) === 'DISPONIBLE');
                       if (freeTable) {
                         onAssignSpecificMatch(freeTable.id, block);
@@ -267,9 +300,14 @@ export default function DashboardPage({
                         onOpenAssign(tables[0]);
                       }
                     }}
-                    className="text-xs font-bold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-lg transition-colors"
+                    disabled={block.hasConflict}
+                    className={`text-xs font-bold px-3 py-1 rounded-lg transition-colors ${
+                      block.hasConflict
+                        ? 'text-slate-400 bg-slate-100 cursor-not-allowed'
+                        : 'text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100'
+                    }`}
                   >
-                    Assigner -&gt;
+                    {block.hasConflict ? 'Bloqué' : 'Assigner ->'}
                   </button>
                 </div>
               </div>

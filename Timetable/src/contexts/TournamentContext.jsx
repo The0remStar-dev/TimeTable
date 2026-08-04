@@ -14,6 +14,7 @@ import {
   assignBracketMatchToTable,
   assignPouleToTable,
   submitPouleMatchResult,
+  submitBracketMatchResult,
   generateBracket
 } from '../services/tournamentEngine';
 
@@ -188,6 +189,7 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
         await assignBracketMatchToTable(matchId, tableId);
       }
 
+      // Realtime will handle updates, but also trigger immediate refresh
       loadMatches();
       loadTables();
       return { success: true };
@@ -198,10 +200,39 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
 
   const completeMatch = async (matchId, score, tableId) => {
     try {
-      await supabase.from('matches').update({ status: 'completed', score, table_id: null, finished_at: new Date().toISOString() }).eq('id', matchId);
+      // First get match details to determine if it's a bracket match
+      const { data: matchData, error: matchError } = await supabase
+        .from('matches')
+        .select('round_type, player1_id, player2_id, score1, score2')
+        .eq('id', matchId)
+        .single();
+
+      if (matchError) throw matchError;
+
+      // Parse score to determine winner
+      const scoreParts = score.split(',').map(s => s.trim());
+      const lastSet = scoreParts[scoreParts.length - 1] || score;
+      const [s1, s2] = lastSet.split('-').map(Number);
+      
+      const winnerId = s1 > s2 ? matchData.player1_id : s2 > s1 ? matchData.player2_id : null;
+      const loserId = s1 > s2 ? matchData.player2_id : s2 > s1 ? matchData.player1_id : null;
+
+      if (matchData.round_type !== 'poule' && winnerId && loserId) {
+        // Use bracket match result submission with winner advancement
+        await submitBracketMatchResult(matchId, s1, s2, winnerId, loserId);
+      } else {
+        // Regular completion for poule matches or edge cases
+        await supabase.from('matches').update({ status: 'completed', score, table_id: null, finished_at: new Date().toISOString() }).eq('id', matchId);
+      }
+
       await supabase.from('tables').update({ status: 'DISPONIBLE' }).eq('id', tableId);
+      
+      // Trigger immediate state refreshes for realtime updates
       loadMatches();
       loadTables();
+      loadPlayers(); // Refresh players to update their status
+      loadCategories(); // Refresh categories in case bracket was generated
+      
       return { success: true };
     } catch (err) {
       return { success: false, error: err.message };
@@ -211,8 +242,10 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
   const autoAssignMatches = async () => {
     const result = await launchNextMatches(null, tournamentId);
     if (result.assigned?.length) {
+      // Trigger immediate state refreshes for realtime updates
       loadMatches();
       loadTables();
+      loadPlayers(); // Refresh players to update their status
     }
     return result;
   };
@@ -231,6 +264,7 @@ export function TournamentProvider({ children, initialTournamentId = null }) {
     assignMatchToTable,
     assignPouleToTable,
     submitPouleMatchResult,
+    submitBracketMatchResult,
     generateBracket,
     completeMatch,
     autoAssignMatches,

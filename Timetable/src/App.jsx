@@ -19,7 +19,7 @@ const normalizeTableStatus = (status) => {
 const getPlayerName = (player) => player?.full_name || player?.name || 'Joueur inconnu';
 const getPlayerById = (playerId, players) => players.find((player) => player.id === playerId);
 
-const buildPouleQueue = (matches, players, categories = []) => {
+const buildPouleQueue = (matches, players, categories = [], busyPlayers = new Map()) => {
   const byPoule = new Map();
   matches.forEach((match) => {
     if (match.round_type !== 'poule' || !match.poule_id) return;
@@ -32,6 +32,7 @@ const buildPouleQueue = (matches, players, categories = []) => {
         category: categoryName,
         matchIds: [],
         players: [],
+        playerObjects: [],
       });
     }
 
@@ -40,31 +41,62 @@ const buildPouleQueue = (matches, players, categories = []) => {
     entry.category = categoryName;
     const p1 = getPlayerById(match.player1_id, players);
     const p2 = getPlayerById(match.player2_id, players);
-    if (p1) entry.players.push(p1.id);
-    if (p2) entry.players.push(p2.id);
+    if (p1) {
+      entry.players.push(p1.id);
+      if (!entry.playerObjects.find(p => p.id === p1.id)) {
+        entry.playerObjects.push(p1);
+      }
+    }
+    if (p2) {
+      entry.players.push(p2.id);
+      if (!entry.playerObjects.find(p => p.id === p2.id)) {
+        entry.playerObjects.push(p2);
+      }
+    }
   });
 
-  return Array.from(byPoule.values()).map((entry) => ({
-    ...entry,
-    players: [...new Set(entry.players)],
-    matchCount: entry.matchIds.length,
-    label: `${entry.label} - ${entry.matchCount} matchs`,
-  }));
+  return Array.from(byPoule.values()).map((entry) => {
+    // Check if any players in this poule are currently playing
+    const conflictingPlayers = entry.players.filter(pid => busyPlayers.has(pid));
+    const conflictTableIds = [...new Set(conflictingPlayers.map(pid => busyPlayers.get(pid)))];
+    
+    return {
+      ...entry,
+      players: [...new Set(entry.players)],
+      playerObjects: entry.playerObjects,
+      matchCount: entry.matchIds.length,
+      label: `${entry.label} - ${entry.matchCount} matchs`,
+      playerNames: entry.playerObjects.map(p => getPlayerName(p)).join(' vs '),
+      hasConflict: conflictingPlayers.length > 0,
+      conflictTableIds,
+      conflictInfo: conflictingPlayers.length > 0 ? `Joueur(s) occupé(s) sur Table(s) ${conflictTableIds.join(', ')}` : null,
+    };
+  });
 };
 
-const buildBracketQueue = (matches, players) =>
+const buildBracketQueue = (matches, players, busyPlayers = new Map()) =>
   matches
     .filter((match) => match.round_type !== 'poule' && match.status === 'scheduled')
     .map((match) => {
       const p1 = getPlayerById(match.player1_id, players);
       const p2 = getPlayerById(match.player2_id, players);
+      
+      // Check if any players are currently playing
+      const conflictingPlayers = [match.player1_id, match.player2_id].filter(pid => busyPlayers.has(pid));
+      const conflictTableIds = [...new Set(conflictingPlayers.map(pid => busyPlayers.get(pid)))];
+      
       return {
         id: match.id,
         type: 'bracket',
         label: `${match.round_type || 'Tour'} · ${getPlayerName(p1)} vs ${getPlayerName(p2)}`,
         category: 'Tableau final',
         players: [match.player1_id, match.player2_id].filter(Boolean),
+        playerObjects: [p1, p2].filter(Boolean),
         matchId: match.id,
+        playerNames: `${getPlayerName(p1)} vs ${getPlayerName(p2)}`,
+        hasConflict: conflictingPlayers.length > 0,
+        conflictTableIds,
+        conflictInfo: conflictingPlayers.length > 0 ? `Joueur(s) occupé(s) sur Table(s) ${conflictTableIds.join(', ')}` : null,
       };
     });
 
@@ -180,7 +212,16 @@ export default function App() {
   const queue = useMemo(() => {
     if (!matches.length || !playersWithState.length) return [];
     const scheduled = matches.filter((match) => String(match.status || '').toLowerCase() === 'scheduled');
-    return [...buildPouleQueue(scheduled, playersWithState, ctxCategories || []), ...buildBracketQueue(scheduled, playersWithState)].sort((a) => (a.type === 'poule' ? -1 : 1));
+    
+    // Get currently playing players across all categories
+    const playingMatches = matches.filter((match) => String(match.status || '').toLowerCase() === 'playing');
+    const busyPlayers = new Map();
+    playingMatches.forEach((match) => {
+      if (match.player1_id && match.table_id) busyPlayers.set(match.player1_id, match.table_id);
+      if (match.player2_id && match.table_id) busyPlayers.set(match.player2_id, match.table_id);
+    });
+    
+    return [...buildPouleQueue(scheduled, playersWithState, ctxCategories || [], busyPlayers), ...buildBracketQueue(scheduled, playersWithState, busyPlayers)].sort((a) => (a.type === 'poule' ? -1 : 1));
   }, [matches, playersWithState, ctxCategories]);
 
   const activeTablesCount = useMemo(
@@ -442,17 +483,45 @@ export default function App() {
                 queue.map((item) => (
                   <div
                     key={item.id}
-                    className="p-3 border border-slate-200 rounded-xl hover:border-emerald-300 hover:bg-emerald-50/40 transition-all flex justify-between items-center text-xs"
+                    className={`p-3 border rounded-xl transition-all flex justify-between items-center text-xs ${
+                      item.hasConflict
+                        ? 'border-red-300 bg-red-50/50'
+                        : 'border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/40'
+                    }`}
                   >
-                    <div>
-                      <p className="font-bold text-slate-800">{item.label}</p>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className={`font-bold ${item.hasConflict ? 'text-red-800' : 'text-slate-800'}`}>{item.label}</p>
+                        {item.hasConflict && (
+                          <span className="text-[10px] font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded-full whitespace-nowrap">
+                            ⚠ Conflit
+                          </span>
+                        )}
+                      </div>
                       <p className="text-[10px] text-slate-500">{item.category}</p>
+                      {item.playerNames && (
+                        <p className="text-[11px] text-slate-600 font-medium mt-1 truncate">{item.playerNames}</p>
+                      )}
+                      {item.hasConflict && item.conflictInfo && (
+                        <p className="text-[10px] text-red-600 font-medium mt-1">{item.conflictInfo}</p>
+                      )}
                     </div>
                     <button
-                      onClick={() => handleAssignSpecificMatch(assignModalTable.id, item)}
-                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] rounded-lg transition-colors"
+                      onClick={() => {
+                        if (item.hasConflict) {
+                          alert(`Impossible d'assigner: ${item.conflictInfo}`);
+                          return;
+                        }
+                        handleAssignSpecificMatch(assignModalTable.id, item);
+                      }}
+                      disabled={item.hasConflict}
+                      className={`px-3 py-1.5 font-bold text-[11px] rounded-lg transition-colors ml-3 ${
+                        item.hasConflict
+                          ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                          : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      }`}
                     >
-                      Lancer ici
+                      {item.hasConflict ? 'Bloqué' : 'Lancer ici'}
                     </button>
                   </div>
                 ))

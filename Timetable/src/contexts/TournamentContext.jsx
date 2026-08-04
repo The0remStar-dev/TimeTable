@@ -43,10 +43,10 @@ async function ensureTables(tournament) {
   if (existing.length > 0) return;
 
   const count = Number(tournament.tables_count) || DEFAULT_TABLES_COUNT;
+  // Le libellé est dérivé du numéro côté UI : ne pas dépendre de tables.name.
   const rows = Array.from({ length: count }, (_, index) => ({
     tournament_id: tournament.id,
     number: index + 1,
-    name: `Table ${index + 1}`,
     status: 'free',
   }));
 

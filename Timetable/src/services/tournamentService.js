@@ -1,23 +1,11 @@
 import { supabase } from './supabaseClient';
+import { isUuid } from '../utils/helpers';
 
-const getAvailablePlayerRatingColumns = async () => {
-  try {
-    const { data, error } = await supabase
-      .from('information_schema.columns')
-      .select('column_name')
-      .eq('table_schema', 'public')
-      .eq('table_name', 'players');
-
-    if (error || !data) return [];
-    return data.map((col) => col.column_name);
-  } catch {
-    return [];
-  }
-};
+const invalidId = (entity) => new Error(`Identifiant ${entity} invalide : un UUID est requis.`);
 
 // A. Créer une nouvelle catégorie (tableau) pour un tournoi
 export const createCategory = async (tournamentId, name, startTime) => {
-  if (!tournamentId || String(tournamentId) === '1') return { data: null, error: new Error('Invalid tournament id') };
+  if (!isUuid(tournamentId)) return { data: null, error: invalidId('de tournoi') };
   const { data, error } = await supabase
     .from('categories')
     .insert([{ tournament_id: tournamentId, name, start_time: startTime, status: 'draft' }])
@@ -26,7 +14,7 @@ export const createCategory = async (tournamentId, name, startTime) => {
 };
 
 export const fetchCategoriesForTournament = async (tournamentId) => {
-  if (!tournamentId || String(tournamentId) === '1') return { data: [], error: null };
+  if (!isUuid(tournamentId)) return { data: [], error: null };
   const { data, error } = await supabase
     .from('categories')
     .select('id, name, start_time, status, tournament_id')
@@ -37,7 +25,7 @@ export const fetchCategoriesForTournament = async (tournamentId) => {
 };
 
 export const updateCategoryStatus = async (categoryId, status) => {
-  if (!categoryId) return { data: null, error: new Error('Invalid category id') };
+  if (!isUuid(categoryId)) return { data: null, error: invalidId('de tableau') };
   const { data, error } = await supabase
     .from('categories')
     .update({ status })
@@ -49,7 +37,7 @@ export const updateCategoryStatus = async (categoryId, status) => {
 };
 
 export const deleteCategoryById = async (categoryId) => {
-  if (!categoryId) return { success: false, error: 'Invalid category id' };
+  if (!isUuid(categoryId)) return { success: false, error: invalidId('de tableau').message };
   try {
     const { error } = await supabase.from('categories').delete().eq('id', categoryId);
     if (error) throw error;
@@ -61,14 +49,16 @@ export const deleteCategoryById = async (categoryId) => {
 
 // B. Créer un joueur et l'inscrire à 1 ou 2 tableaux en une seule action
 export const createPlayerWithCategories = async (tournamentId, playerData, categoryIds = []) => {
-  if (!tournamentId || String(tournamentId) === '1') return { success: false, error: 'Invalid tournament id' };
+  if (!isUuid(tournamentId)) return { success: false, error: invalidId('de tournoi').message };
   try {
     if (categoryIds.length > 2) {
       throw new Error('Un joueur ne peut pas être inscrit dans plus de 2 tableaux.');
     }
+    if (!categoryIds.every(isUuid)) {
+      throw new Error(invalidId('de tableau').message);
+    }
 
     const rating = Number(playerData.fftt_points ?? playerData.points ?? 500);
-    const availableRatingColumns = await getAvailablePlayerRatingColumns();
 
     // 1. Inscription du joueur
     const playerPayload = {
@@ -76,16 +66,9 @@ export const createPlayerWithCategories = async (tournamentId, playerData, categ
       name: playerData.name,
       email: playerData.email || null,
       payment_status: playerData.payment_status || 'unpaid',
+      fftt_points: rating,
+      points: rating,
     };
-
-    if (rating !== undefined && rating !== null) {
-      if (availableRatingColumns.includes('fftt_points')) {
-        playerPayload.fftt_points = rating;
-      }
-      if (availableRatingColumns.includes('points')) {
-        playerPayload.points = rating;
-      }
-    }
 
     const { data: player, error: playerError } = await supabase
       .from('players')
@@ -116,7 +99,7 @@ export const createPlayerWithCategories = async (tournamentId, playerData, categ
 };
 
 export const updatePlayerPaymentStatus = async (playerId, paid) => {
-  if (!playerId) return { success: false, error: 'Invalid player id' };
+  if (!isUuid(playerId)) return { success: false, error: invalidId('de joueur').message };
 
   try {
     const payload = { payment_status: paid ? 'paid' : 'unpaid' };
@@ -129,7 +112,7 @@ export const updatePlayerPaymentStatus = async (playerId, paid) => {
 };
 
 export const deletePlayerById = async (playerId) => {
-  if (!playerId) return { success: false, error: 'Invalid player id' };
+  if (!isUuid(playerId)) return { success: false, error: invalidId('de joueur').message };
 
   try {
     const { error } = await supabase.from('players').delete().eq('id', playerId);
@@ -142,7 +125,7 @@ export const deletePlayerById = async (playerId) => {
 
 // C. Récupérer tous les tableaux avec le nombre actuel d'inscrits
 export const fetchCategoriesWithCounts = async (tournamentId) => {
-  if (!tournamentId || String(tournamentId) === '1') return { data: null, error: new Error('Invalid tournament id') };
+  if (!isUuid(tournamentId)) return { data: null, error: invalidId('de tournoi') };
   const { data, error } = await supabase
     .from('categories')
     .select('*, category_players(count), status')

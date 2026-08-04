@@ -8,6 +8,7 @@ import PaymentsPage from './pages/PaymentsPage';
 import SettingsPage from './pages/SettingsPage';
 import ManageTournament from './pages/ManageTournament';
 import { useTournament } from './contexts/TournamentContext';
+import { getTableLabel } from './utils/helpers';
 
 const normalizeTableStatus = (status) => {
   const value = String(status || '').trim().toUpperCase();
@@ -198,6 +199,7 @@ export default function App() {
     () =>
       (ctxTables ?? []).map((table) => ({
         ...table,
+        name: getTableLabel(table),
         status: normalizeTableStatus(table.status),
         context: buildTableContext(table, matches, derivedPlayers),
       })),

@@ -11,6 +11,9 @@
  */
 
 import { supabase } from './supabaseClient';
+import { isUuid } from '../utils/helpers';
+
+const FREE_TABLE_STATUSES = ['free', 'DISPONIBLE'];
 
 // =======================================================================
 // UTILITAIRES GÉNÉRAUX
@@ -84,64 +87,45 @@ export function distributeSerpentine(sortedPlayers, pouleSizes) {
   return poules;
 }
 
-function buildPouleMatchesPayload(categoryId, pouleId, players, tournamentId = null) {
-  const matches = [];
+// Les matchs appartiennent à une catégorie (tableau) : aucun tournament_id ici,
+// le tournoi se déduit de categories.tournament_id.
+function buildPouleMatch(categoryId, pouleId, p1, p2, order) {
+  if (!isUuid(p1?.id) || !isUuid(p2?.id)) {
+    throw new Error('Identifiant de joueur invalide : un UUID est requis pour créer un match.');
+  }
+  return {
+    category_id: categoryId,
+    poule_id: pouleId,
+    round_type: 'poule',
+    poule_order: order,
+    player1_id: p1.id,
+    player2_id: p2.id,
+    status: 'scheduled',
+  };
+}
 
+function buildPouleMatchesPayload(categoryId, pouleId, players) {
   if (players.length === 3) {
     const [A, B, C] = players;
-    const order = [
+    return [
       [A, C],
       [B, C],
       [A, B],
-    ];
-    order.forEach(([p1, p2], i) => {
-      matches.push({
-        category_id: categoryId,
-        tournament_id: tournamentId,
-        poule_id: pouleId,
-        round_type: 'poule',
-        poule_order: i + 1,
-        player1_id: p1.id,
-        player2_id: p2.id,
-        status: 'scheduled',
-      });
-    });
-  } else if (players.length === 2) {
-    const [A, B] = players;
-    matches.push({
-      category_id: categoryId,
-      tournament_id: tournamentId,
-      poule_id: pouleId,
-      round_type: 'poule',
-      poule_order: 1,
-      player1_id: A.id,
-      player2_id: B.id,
-      status: 'scheduled',
-    });
+    ].map(([p1, p2], i) => buildPouleMatch(categoryId, pouleId, p1, p2, i + 1));
   }
-
-  return matches;
+  if (players.length === 2) {
+    const [A, B] = players;
+    return [buildPouleMatch(categoryId, pouleId, A, B, 1)];
+  }
+  return [];
 }
 
-export async function generatePoules(categoryId, playersList, tournamentId = null) {
+export async function generatePoules(categoryId, playersList) {
+  if (!isUuid(categoryId)) {
+    throw new Error('Identifiant de tableau invalide : un UUID est requis pour générer les poules.');
+  }
   if (!playersList || playersList.length === 0) {
     throw new Error('Liste de joueurs vide pour generatePoules');
-  }
-
-  let resolvedTournamentId = tournamentId ?? playersList[0]?.tournament_id ?? null;
-
-  if (!resolvedTournamentId && categoryId) {
-    const { data: categoryRow, error: categoryError } = await supabase
-      .from('categories')
-      .select('tournament_id')
-      .eq('id', categoryId)
-      .single();
-
-    if (categoryError) {
-      console.error('[tournamentEngine] Impossible de lire le tournoi depuis la catégorie', categoryError);
-    } else {
-      resolvedTournamentId = categoryRow?.tournament_id ?? null;
-    }
   }
 
   const sorted = [...playersList].sort((a, b) => (b.fftt_points ?? 0) - (a.fftt_points ?? 0));
@@ -159,11 +143,11 @@ export async function generatePoules(categoryId, playersList, tournamentId = nul
     }
     const pouleId = crypto.randomUUID();
     createdPoules.push({ pouleId, players });
-    allMatchesPayload.push(...buildPouleMatchesPayload(categoryId, pouleId, players, resolvedTournamentId));
+    allMatchesPayload.push(...buildPouleMatchesPayload(categoryId, pouleId, players));
   }
 
   if (allMatchesPayload.length > 0) {
-    console.log('[tournamentEngine] Insertion matchs poules', allMatchesPayload.length, { categoryId, tournamentId: resolvedTournamentId });
+    console.log('[tournamentEngine] Insertion matchs poules', allMatchesPayload.length, { categoryId });
     const { error: matchError } = await supabase.from('matches').insert(allMatchesPayload);
     if (matchError) {
       console.error('[tournamentEngine] Erreur insert matches', matchError);
@@ -204,6 +188,10 @@ export async function generatePoules(categoryId, playersList, tournamentId = nul
 }
 
 export async function assignPouleToTable(pouleId, tableId) {
+  if (!isUuid(pouleId) || !isUuid(tableId)) {
+    throw new Error('Identifiants invalides : la poule et la table doivent être des UUID.');
+  }
+
   // First, get all players in this poule to check for conflicts
   const { data: pouleMatches, error: pouleError } = await supabase
     .from('matches')
@@ -243,11 +231,15 @@ export async function assignPouleToTable(pouleId, tableId) {
 }
 
 export async function submitPouleMatchResult(matchId, score1, score2, winnerId) {
+  if (!isUuid(matchId)) {
+    throw new Error('Identifiant de match invalide : un UUID est requis.');
+  }
+
   const { data, error } = await supabase.rpc('complete_poule_match', {
     p_match_id: matchId,
     p_score1: score1,
     p_score2: score2,
-    p_winner_id: winnerId,
+    p_winner_id: isUuid(winnerId) ? winnerId : null,
   });
   if (error) {
     console.error('[tournamentEngine] Erreur RPC complete_poule_match', error);
@@ -354,6 +346,10 @@ function rankPoulePlayers(pouleMatches, players) {
 }
 
 export async function generateBracket(categoryId) {
+  if (!isUuid(categoryId)) {
+    throw new Error('Identifiant de tableau invalide : un UUID est requis pour générer l\'arbre.');
+  }
+
   const { data: pouleMatches, error: pmError } = await supabase
     .from('matches')
     .select('*')
@@ -449,13 +445,15 @@ export async function generateBracket(categoryId) {
 
     if (p1 && p2) {
       firstRoundMatchesPayload.push({
-        category_id: categoryId,
-        round_type: roundType,
-        player1_id: p1.id,
-        player2_id: p2.id,
-        status: 'scheduled',
-        is_bye: false,
         pairIndex: i,
+        match: {
+          category_id: categoryId,
+          round_type: roundType,
+          player1_id: p1.id,
+          player2_id: p2.id,
+          status: 'scheduled',
+          is_bye: false,
+        },
       });
     } else {
       const advancing = p1 || p2;
@@ -465,15 +463,15 @@ export async function generateBracket(categoryId) {
 
   let insertedFirstRound = [];
   if (firstRoundMatchesPayload.length > 0) {
-    const cleanPayload = firstRoundMatchesPayload.map(({ pairIndex, ...rest }) => ({ ...rest, pairIndex }));
+    // pairIndex sert uniquement au châînage local : il ne doit jamais partir vers Postgres.
     const { data: inserted, error: insError } = await supabase
       .from('matches')
-      .insert(cleanPayload)
+      .insert(firstRoundMatchesPayload.map((entry) => entry.match))
       .select('id, player1_id, player2_id');
     if (insError) throw new Error(`Erreur création tour préliminaire : ${insError.message}`);
     insertedFirstRound = inserted.map((row, idx) => ({
       ...row,
-      pairIndex: cleanPayload[idx].pairIndex,
+      pairIndex: firstRoundMatchesPayload[idx].pairIndex,
     }));
   }
 
@@ -570,17 +568,19 @@ async function getBusyPlayerIds(playerIds) {
   return busy;
 }
 
-async function getScheduledQueue(categoryId, tournamentId) {
+async function getScheduledQueue(categoryIds) {
+  const scopedIds = (categoryIds || []).filter(isUuid);
+  if (categoryIds && scopedIds.length === 0) return [];
+
   let query = supabase
     .from('matches')
-    .select('id, poule_id, round_type, player1_id, player2_id, created_at, category_id, tournament_id')
+    .select('id, poule_id, round_type, player1_id, player2_id, created_at, category_id')
     .eq('status', 'scheduled')
     .not('player1_id', 'is', null)
     .not('player2_id', 'is', null)
     .order('created_at', { ascending: true });
 
-  if (categoryId) query = query.eq('category_id', categoryId);
-  if (tournamentId) query = query.eq('tournament_id', tournamentId);
+  if (scopedIds.length > 0) query = query.in('category_id', scopedIds);
 
   const { data, error } = await query;
   if (error) throw new Error(`Erreur lecture file d'attente : ${error.message}`);
@@ -601,16 +601,19 @@ async function getScheduledQueue(categoryId, tournamentId) {
   return queue;
 }
 
-export async function getFreeTables() {
-  const { data, error } = await supabase.from('tables').select('id, name, label, status').in('status', ['DISPONIBLE', 'free']);
+export async function getFreeTables(tournamentId = null) {
+  let query = supabase.from('tables').select('*').in('status', FREE_TABLE_STATUSES);
+  if (isUuid(tournamentId)) query = query.eq('tournament_id', tournamentId);
+
+  const { data, error } = await query;
   if (error) throw new Error(`Erreur lecture tables libres : ${error.message}`);
   return data;
 }
 
-export async function launchNextMatches(categoryId = null, tournamentId = null) {
+export async function launchNextMatches(categoryIds = null, tournamentId = null) {
   const [freeTables, queue] = await Promise.all([
-    getFreeTables(),
-    getScheduledQueue(categoryId, tournamentId),
+    getFreeTables(tournamentId),
+    getScheduledQueue(categoryIds),
   ]);
 
   if (freeTables.length === 0) {
@@ -666,6 +669,10 @@ export async function launchNextMatches(categoryId = null, tournamentId = null) 
 }
 
 export async function assignBracketMatchToTable(matchId, tableId) {
+  if (!isUuid(matchId) || !isUuid(tableId)) {
+    throw new Error('Identifiants invalides : le match et la table doivent être des UUID.');
+  }
+
   const { data: match, error: mErr } = await supabase
     .from('matches')
     .select('player1_id, player2_id, status')
@@ -688,9 +695,9 @@ export async function assignBracketMatchToTable(matchId, tableId) {
     .eq('id', tableId)
     .single();
   if (tErr) throw new Error(`Table introuvable : ${tErr.message}`);
-  if (table.status !== 'DISPONIBLE' && table.status !== 'free') throw new Error('Cette table n\'est plus libre.');
+  if (!FREE_TABLE_STATUSES.includes(table.status)) throw new Error('Cette table n\'est plus libre.');
 
-  const { error: updTableErr } = await supabase.from('tables').update({ status: 'EN COURS' }).eq('id', tableId);
+  const { error: updTableErr } = await supabase.from('tables').update({ status: 'busy' }).eq('id', tableId);
   if (updTableErr) throw new Error(`Erreur mise à jour table : ${updTableErr.message}`);
 
   const { error: updMatchErr } = await supabase
@@ -698,7 +705,7 @@ export async function assignBracketMatchToTable(matchId, tableId) {
     .update({ status: 'playing', table_id: tableId, started_at: new Date().toISOString() })
     .eq('id', matchId);
   if (updMatchErr) {
-    await supabase.from('tables').update({ status: 'DISPONIBLE' }).eq('id', tableId);
+    await supabase.from('tables').update({ status: 'free' }).eq('id', tableId);
     throw new Error(`Erreur mise à jour match : ${updMatchErr.message}`);
   }
 
@@ -706,12 +713,16 @@ export async function assignBracketMatchToTable(matchId, tableId) {
 }
 
 export async function submitBracketMatchResult(matchId, score1, score2, winnerId, loserId) {
+  if (!isUuid(matchId)) {
+    throw new Error('Identifiant de match invalide : un UUID est requis.');
+  }
+
   const { data, error } = await supabase.rpc('advance_bracket_winner', {
     p_match_id: matchId,
     p_score1: score1,
     p_score2: score2,
-    p_winner_id: winnerId,
-    p_loser_id: loserId,
+    p_winner_id: isUuid(winnerId) ? winnerId : null,
+    p_loser_id: isUuid(loserId) ? loserId : null,
   });
   if (error) throw new Error(`Erreur avancement dans l'arbre : ${error.message}`);
   

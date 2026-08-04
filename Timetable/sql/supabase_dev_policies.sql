@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS public.players (
 CREATE TABLE IF NOT EXISTS public.tables (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tournament_id uuid REFERENCES public.tournaments(id) ON DELETE CASCADE,
-  name text NOT NULL,
+  number integer,
+  name text,
   label text,
   status text DEFAULT 'free',
   created_at timestamptz DEFAULT now(),
@@ -106,6 +107,10 @@ ALTER TABLE public.category_players
 ALTER TABLE public.players
   ADD COLUMN IF NOT EXISTS full_name text,
   ADD COLUMN IF NOT EXISTS points integer DEFAULT 0;
+
+-- Voir 002_align_schema_with_app.sql pour les colonnes manquantes sur une
+-- base déjà existante (matches.score1/score2/winner_id/finished_at,
+-- tables.number/name/label).
 
 CREATE INDEX IF NOT EXISTS idx_matches_playing_p1
   ON public.matches (player1_id) WHERE status = 'playing';
